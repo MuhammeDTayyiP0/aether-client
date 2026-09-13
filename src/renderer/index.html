@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="tr">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Aether</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="top">
+        <p class="mark">Aether</p>
+        <button type="button" id="lang" class="lang" aria-label="Language">TR</button>
+      </header>
+
+      <section class="stage">
+        <div class="ring" id="ring" data-state="down">
+          <span class="ring-core"></span>
+        </div>
+        <p class="state" id="stateLabel">bağlanmamış</p>
+        <p class="node-name" id="nodeName">düğüm seç</p>
+      </section>
+
+      <button type="button" class="go" id="go">Bağlan</button>
+
+      <ol class="steps" id="steps" hidden></ol>
+
+      <p class="err" id="err" hidden></p>
+
+      <section class="block">
+        <div class="block-head">
+          <h2 id="nodesTitle">Düğümler</h2>
+        </div>
+        <ul class="nodes" id="nodes"></ul>
+        <textarea
+          id="paste"
+          rows="3"
+          spellcheck="false"
+          placeholder="vless://… veya sing-box JSON"
+        ></textarea>
+        <button type="button" class="ghost" id="add">Ekle</button>
+      </section>
+
+      <footer class="foot">
+        <span id="proxyHint">SOCKS/HTTP 127.0.0.1:1080</span>
+      </footer>
+    </div>
+    <script src="app.js"></script>
+  </body>
+</html>

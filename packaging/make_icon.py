@@ -16,8 +16,9 @@ for y in range(h):
         else:
             row += bytes((12, 12, 13))
     rows.append(bytes(row))
+sig = bytes([137, 80, 78, 71, 13, 10, 26, 10])
 png = (
-    b"\\x89PNG\\r\\n\\x1a\\n"
+    sig
     + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
     + chunk(b"IDAT", zlib.compress(b"".join(rows), 9))
     + chunk(b"IEND", b"")

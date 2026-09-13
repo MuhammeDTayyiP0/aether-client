@@ -1,11 +1,16 @@
-vlist.geldesat.com
+Coolify: vlist.geldesat.com
 
-1. Aether panel Atölye → vless:// satırını kopyala
-2. list.json içine yapıştır (name + vless)
-3. Bu klasörü vlist.geldesat.com köküne koy:
+Kaynak: GitHub MuhammeDTayyiP0/aether-client
+Base Directory: /vlist
+Build Pack: Dockerfile
+Port: 80
+Domains: https://vlist.geldesat.com
 
-   https://vlist.geldesat.com/list.json
+Environment:
+  AETHER_NAME=Aether
+  AETHER_VLESS=vless://...paneldeki satır...
 
-Cloudflare: turuncu bulut, SSL Full.
-
-İstemci açılınca bu adresi kendi çeker. JSON'u tarayıcıda açınca vless görünür — bu dosyayı herkese açık say.
+Cloudflare DNS:
+  CNAME vlist → Coolify sunucu IP/hostname
+  Proxy: turuncu (MEB için)
+  SSL: Full

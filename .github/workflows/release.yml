@@ -3,6 +3,9 @@ name: Release
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "vlist/**"
+      - "README.md"
   workflow_dispatch:
 
 permissions:

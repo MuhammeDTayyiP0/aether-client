@@ -3,7 +3,7 @@
   "version": "1.1.0",
   "description": "Aether — Cloudflare kenarlı masaüstü istemci",
   "main": "src/main.js",
-  "author": "Aether",
+  "author": "Aether <aether@local>",
   "license": "MIT",
   "homepage": "https://github.com/MuhammeDTayyiP0/aether-client",
   "repository": {

@@ -26,4 +26,5 @@ linux:
     - tar.gz
   category: Network
   executableName: aether
+  maintainer: Aether <aether@local>
   artifactName: aether-${version}-linux-amd64.${ext}

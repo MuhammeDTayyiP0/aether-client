@@ -11,7 +11,7 @@ const path = require("path");
 const fs = require("fs");
 const https = require("https");
 const http = require("http");
-const { spawn } = require("child_process");
+const { spawn, execFileSync } = require("child_process");
 
 const VLIST_URLS = [
   "https://vlist.geldesat.com/list.json",
@@ -23,7 +23,8 @@ let win = null;
 let tray = null;
 let child = null;
 let activeId = null;
-let quitting = false;
+let lastExitIp = "";
+let proxyArmed = false;
 
 function storePath() {
   return path.join(app.getPath("userData"), "profiles.json");
@@ -69,6 +70,7 @@ function statusPayload(extra = {}) {
     coreOk: fs.existsSync(corePath()),
     vlist: VLIST_URLS[0],
     platform: process.platform,
+    exitIp: lastExitIp || "",
     ...extra,
   };
 }
@@ -115,13 +117,158 @@ function stopCore() {
   const proc = child;
   child = null;
   activeId = null;
+  lastExitIp = "";
   if (proc && proc.pid) killPid(proc.pid);
   try {
     fs.unlinkSync(pidPath());
   } catch {
     /* ignore */
   }
+  clearSystemProxy();
   send("status", statusPayload());
+}
+
+function proxyPrevPath() {
+  return path.join(app.getPath("userData"), "proxy-prev.json");
+}
+
+function winReg(args) {
+  try {
+    return execFileSync("reg", args, { windowsHide: true, timeout: 4000 }).toString();
+  } catch (e) {
+    return (e.stdout || e.stderr || "").toString();
+  }
+}
+
+function refreshWinInet() {
+  try {
+    execFileSync(
+      "powershell.exe",
+      [
+        "-NoProfile",
+        "-Command",
+        'Add-Type -TypeDefinition \'using System.Runtime.InteropServices;public class A{[DllImport("wininet.dll")]public static extern bool InternetSetOption(int h,int o,int l,int s);}\'; [A]::InternetSetOption(0,39,0,0)|Out-Null; [A]::InternetSetOption(0,37,0,0)|Out-Null',
+      ],
+      { windowsHide: true, timeout: 5000 }
+    );
+  } catch {
+    /* ignore */
+  }
+}
+
+function applySystemProxy() {
+  if (proxyArmed) return;
+  if (process.platform === "win32") {
+    const key = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings";
+    const prev = { enable: "0", server: "" };
+    const qe = winReg(["query", key, "/v", "ProxyEnable"]);
+    const m = qe.match(/ProxyEnable\s+REG_DWORD\s+0x([0-9a-f]+)/i);
+    if (m) prev.enable = String(parseInt(m[1], 16));
+    const qs = winReg(["query", key, "/v", "ProxyServer"]);
+    const s = qs.match(/ProxyServer\s+REG_SZ\s+(.+)/i);
+    if (s) prev.server = s[1].trim();
+    try {
+      fs.writeFileSync(proxyPrevPath(), JSON.stringify(prev));
+    } catch {
+      /* ignore */
+    }
+    winReg(["add", key, "/v", "ProxyEnable", "/t", "REG_DWORD", "/d", "1", "/f"]);
+    winReg(["add", key, "/v", "ProxyServer", "/t", "REG_SZ", "/d", "127.0.0.1:1080", "/f"]);
+    refreshWinInet();
+    proxyArmed = true;
+    return;
+  }
+  try {
+    execFileSync("gsettings", ["set", "org.gnome.system.proxy", "mode", "manual"], { timeout: 2000 });
+    execFileSync("gsettings", ["set", "org.gnome.system.proxy.http", "host", "127.0.0.1"], { timeout: 2000 });
+    execFileSync("gsettings", ["set", "org.gnome.system.proxy.http", "port", "1080"], { timeout: 2000 });
+    execFileSync("gsettings", ["set", "org.gnome.system.proxy.https", "host", "127.0.0.1"], { timeout: 2000 });
+    execFileSync("gsettings", ["set", "org.gnome.system.proxy.https", "port", "1080"], { timeout: 2000 });
+    execFileSync("gsettings", ["set", "org.gnome.system.proxy.socks", "host", "127.0.0.1"], { timeout: 2000 });
+    execFileSync("gsettings", ["set", "org.gnome.system.proxy.socks", "port", "1080"], { timeout: 2000 });
+    proxyArmed = true;
+  } catch {
+    /* XFCE / no gsettings */
+  }
+}
+
+function clearSystemProxy() {
+  if (process.platform === "win32") {
+    const key = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings";
+    let prev = { enable: "0", server: "" };
+    try {
+      prev = JSON.parse(fs.readFileSync(proxyPrevPath(), "utf8"));
+    } catch {
+      /* none */
+    }
+    winReg(["add", key, "/v", "ProxyEnable", "/t", "REG_DWORD", "/d", prev.enable || "0", "/f"]);
+    if (prev.server) {
+      winReg(["add", key, "/v", "ProxyServer", "/t", "REG_SZ", "/d", prev.server, "/f"]);
+    } else {
+      winReg(["delete", key, "/v", "ProxyServer", "/f"]);
+    }
+    try {
+      fs.unlinkSync(proxyPrevPath());
+    } catch {
+      /* ignore */
+    }
+    refreshWinInet();
+    proxyArmed = false;
+    return;
+  }
+  if (!proxyArmed) return;
+  try {
+    execFileSync("gsettings", ["set", "org.gnome.system.proxy", "mode", "none"], { timeout: 2000 });
+  } catch {
+    /* ignore */
+  }
+  proxyArmed = false;
+}
+
+function probeViaProxy() {
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      {
+        host: "127.0.0.1",
+        port: 1080,
+        path: "http://api.ipify.org/",
+        method: "GET",
+        headers: { Host: "api.ipify.org", Connection: "close", "User-Agent": "Aether" },
+        timeout: 6000,
+      },
+      (res) => {
+        let d = "";
+        res.on("data", (c) => {
+          d += c;
+        });
+        res.on("end", () => {
+          const ip = d.trim();
+          if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(ip)) resolve(ip);
+          else reject(new Error("ip alınamadı"));
+        });
+      }
+    );
+    req.on("error", reject);
+    req.on("timeout", () => {
+      req.destroy();
+      reject(new Error("tünel zaman aşımı"));
+    });
+    req.end();
+  });
+}
+
+async function waitForTunnel() {
+  let last = new Error("tünel yok");
+  for (let i = 0; i < 10; i++) {
+    await new Promise((r) => setTimeout(r, 350 + i * 150));
+    if (!child) throw new Error("çekirdek durdu");
+    try {
+      return await probeViaProxy();
+    } catch (e) {
+      last = e;
+    }
+  }
+  throw last;
 }
 
 function fetchText(url, timeoutMs = 9000, hops = 0) {
@@ -344,7 +491,7 @@ function addFromText(raw) {
   return store.profiles;
 }
 
-function startCore(id) {
+async function startCore(id) {
   if (child) stopCore();
   const store = loadStore();
   const profile = store.profiles.find((p) => p.id === id);
@@ -377,16 +524,26 @@ function startCore(id) {
     if (child === proc) {
       child = null;
       activeId = null;
+      lastExitIp = "";
       try {
         fs.unlinkSync(pidPath());
       } catch {
         /* ignore */
       }
+      clearSystemProxy();
       send("status", statusPayload({ lastError: code ? stripAnsi(errBuf) || "çıkış " + code : "" }));
     }
   });
-  send("status", statusPayload());
-  return statusPayload();
+  try {
+    lastExitIp = await waitForTunnel();
+    applySystemProxy();
+    send("status", statusPayload());
+    return statusPayload();
+  } catch (e) {
+    const msg = stripAnsi(errBuf) || e.message || "tünel kurulamadı";
+    stopCore();
+    throw new Error(msg);
+  }
 }
 
 function createWindow() {
@@ -487,6 +644,11 @@ if (!gotLock) {
 
 app.whenReady().then(() => {
   killStale();
+  try {
+    if (fs.existsSync(proxyPrevPath())) clearSystemProxy();
+  } catch {
+    /* ignore */
+  }
   createWindow();
   createTray();
   pullVlist()

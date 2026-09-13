@@ -44,7 +44,7 @@ let profiles = [];
 let selected = null;
 let running = false;
 let busy = false;
-let stepTimer = null;
+let exitIp = "";
 
 const $ = (id) => document.getElementById(id);
 function t(key) {
@@ -61,7 +61,7 @@ function paint() {
   $("add").textContent = L.add;
   $("reload").textContent = L.reload;
   $("manualToggle").textContent = L.manual;
-  $("proxyHint").textContent = L.proxy;
+  $("proxyHint").textContent = running && exitIp ? "çıkış " + exitIp : L.proxy;
   const p = selectedProfile();
   $("nodeName").textContent = p ? p.name : L.pick;
   const ring = $("ring");
@@ -244,6 +244,7 @@ $("ring").addEventListener("click", toggle);
 
 window.aether.onStatus((s) => {
   running = Boolean(s.running);
+  exitIp = s.exitIp || "";
   if (!s.running) {
     busy = false;
     clearSteps();

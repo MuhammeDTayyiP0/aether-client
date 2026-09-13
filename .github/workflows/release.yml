@@ -9,53 +9,81 @@ permissions:
   contents: write
 
 jobs:
-  release:
+  linux:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: 18
-
-      - name: Fetch sing-box cores
+      - name: Fetch linux core
         run: |
           set -euo pipefail
           TAG=$(curl -fsSL https://api.github.com/repos/SagerNet/sing-box/releases/latest | jq -r .tag_name)
           VER="${TAG#v}"
-          mkdir -p resources/bin/win resources/bin/linux
-          curl -fsSL -o win.zip "https://github.com/SagerNet/sing-box/releases/download/${TAG}/sing-box-${VER}-windows-amd64.zip"
+          mkdir -p resources/bin/linux
           curl -fsSL -o linux.tgz "https://github.com/SagerNet/sing-box/releases/download/${TAG}/sing-box-${VER}-linux-amd64.tar.gz"
-          unzip -j win.zip "*/sing-box.exe" -d resources/bin/win
-          mv resources/bin/win/sing-box.exe resources/bin/win/aether-core.exe
           tar -xzf linux.tgz
           cp sing-box-*/sing-box resources/bin/linux/aether-core
-          chmod +x resources/bin/linux/aether-core resources/bin/win/aether-core.exe
-
-      - name: Icon
-        run: |
+          chmod +x resources/bin/linux/aether-core
           mkdir -p build
           python3 packaging/make_icon.py build/icon.png
-
-      - name: npm install
-        run: npm install
-
-      - name: electron-builder
+      - run: npm install
+      - name: Build Linux
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
         run: |
-          npx electron-builder --linux AppImage deb tar.gz --win zip --publish never \
+          npx electron-builder --linux AppImage deb tar.gz --publish never \
             --config.extraMetadata.version=1.1.${{ github.run_number }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: |
+            dist/aether-*.AppImage
+            dist/aether-*.deb
+            dist/aether-*.tar.gz
 
-      - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 18
+      - name: Fetch windows core
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG=$(curl -fsSL https://api.github.com/repos/SagerNet/sing-box/releases/latest | jq -r .tag_name)
+          VER="${TAG#v}"
+          mkdir -p resources/bin/win
+          curl -fsSL -o win.zip "https://github.com/SagerNet/sing-box/releases/download/${TAG}/sing-box-${VER}-windows-amd64.zip"
+          unzip -j win.zip "*/sing-box.exe" -d resources/bin/win
+          mv resources/bin/win/sing-box.exe resources/bin/win/aether-core.exe
+          mkdir -p build
+          python packaging/make_icon.py build/icon.png
+      - run: npm install
+      - name: Build Windows
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: npx electron-builder --win zip --publish never --config.extraMetadata.version=1.1.${{ github.run_number }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/aether-*.zip
+
+  release:
+    needs: [linux, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+          path: out
+      - uses: softprops/action-gh-release@v2
         with:
           tag_name: v1.1.${{ github.run_number }}
           name: Aether v1.1.${{ github.run_number }}
           generate_release_notes: true
           make_latest: true
-          files: |
-            dist/aether-*.zip
-            dist/aether-*.AppImage
-            dist/aether-*.deb
-            dist/aether-*.tar.gz
+          files: out/aether-*

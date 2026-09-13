@@ -2,6 +2,7 @@ appId: app.aether.client
 productName: Aether
 copyright: Aether
 asar: true
+forceCodeSigning: false
 directories:
   output: dist
   buildResources: build
@@ -16,6 +17,7 @@ extraResources:
 win:
   target:
     - zip
+  signAndEditExecutable: false
   artifactName: aether-${version}-windows-amd64.zip
 linux:
   target:
@@ -25,10 +27,3 @@ linux:
   category: Network
   executableName: aether
   artifactName: aether-${version}-linux-amd64.${ext}
-  desktop:
-    Name: Aether
-    Comment: Aether client
-    Categories: Network
-nsis:
-  oneClick: false
-  allowToChangeInstallationDirectory: true

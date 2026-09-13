@@ -68,6 +68,7 @@ function statusPayload(extra = {}) {
     core: corePath(),
     coreOk: fs.existsSync(corePath()),
     vlist: VLIST_URLS[0],
+    platform: process.platform,
     ...extra,
   };
 }
@@ -164,6 +165,46 @@ function fetchText(url, timeoutMs = 9000, hops = 0) {
   });
 }
 
+function stripAnsi(s) {
+  return String(s || "")
+    .replace(/\x1B\[[0-9;]*[A-Za-z]/g, "")
+    .replace(/\[(3[0-9]|0|1)m/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function migrateConfig(cfg) {
+  if (!cfg || typeof cfg !== "object") return cfg;
+  const next = JSON.parse(JSON.stringify(cfg));
+  next.log = next.log || { level: "warn", timestamp: true };
+  next.dns = {
+    servers: [
+      { type: "local", tag: "local" },
+      { type: "https", tag: "cloud", server: "1.1.1.1", path: "/dns-query", detour: "proxy" },
+    ],
+    strategy: "prefer_ipv4",
+    final: "cloud",
+  };
+  if (Array.isArray(next.outbounds)) {
+    next.outbounds = next.outbounds.map((o) => {
+      if (!o || typeof o !== "object") return o;
+      if (o.type === "block" || o.type === "dns") return o;
+      return Object.assign({}, o, { domain_resolver: "local" });
+    });
+  }
+  next.route = {
+    auto_detect_interface: true,
+    default_domain_resolver: "local",
+    rules: [
+      { action: "sniff" },
+      { protocol: "dns", action: "hijack-dns" },
+      { ip_is_private: true, outbound: "direct" },
+    ],
+    final: "proxy",
+  };
+  return next;
+}
+
 function singboxFromVless(link) {
   const u = new URL(link.trim());
   if (u.protocol !== "vless:") throw new Error("vless:// bekleniyor");
@@ -179,15 +220,7 @@ function singboxFromVless(link) {
   return {
     name,
     domain: host,
-    config: {
-      log: { level: "warn", timestamp: true },
-      dns: {
-        servers: [
-          { tag: "local", address: "local" },
-          { tag: "cloud", address: "https://1.1.1.1/dns-query", detour: "proxy" },
-        ],
-        strategy: "prefer_ipv4",
-      },
+    config: migrateConfig({
       inbounds: [{ type: "mixed", tag: "mixed-in", listen: "127.0.0.1", listen_port: 1080 }],
       outbounds: [
         {
@@ -202,15 +235,7 @@ function singboxFromVless(link) {
         },
         { type: "direct", tag: "direct" },
       ],
-      route: {
-        auto_detect_interface: true,
-        rules: [
-          { protocol: "dns", outbound: "proxy" },
-          { ip_is_private: true, outbound: "direct" },
-        ],
-        final: "proxy",
-      },
-    },
+    }),
   };
 }
 
@@ -329,7 +354,8 @@ function startCore(id) {
     throw new Error("Çekirdek yok — GitHub Release paketini kullan");
   }
   const cfgPath = path.join(app.getPath("userData"), "active.json");
-  fs.writeFileSync(cfgPath, JSON.stringify(profile.config, null, 2));
+  const cfg = migrateConfig(profile.config);
+  fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2));
   const proc = spawn(bin, ["run", "-c", cfgPath], {
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
@@ -356,7 +382,7 @@ function startCore(id) {
       } catch {
         /* ignore */
       }
-      send("status", statusPayload({ lastError: code ? errBuf || "çıkış " + code : "" }));
+      send("status", statusPayload({ lastError: code ? stripAnsi(errBuf) || "çıkış " + code : "" }));
     }
   });
   send("status", statusPayload());
@@ -365,21 +391,31 @@ function startCore(id) {
 
 function createWindow() {
   const ico = iconFile();
-  win = new BrowserWindow({
-    width: 400,
-    height: 680,
-    resizable: false,
-    backgroundColor: "#0b0b0c",
+  const opts = {
+    width: 420,
+    height: 700,
+    minWidth: 400,
+    minHeight: 640,
+    backgroundColor: "#0c0c0e",
     autoHideMenuBar: true,
     title: "Aether",
+    show: false,
     icon: fs.existsSync(ico) ? ico : undefined,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
     },
-  });
+  };
+  if (process.platform === "win32") {
+    opts.titleBarStyle = "hidden";
+    opts.titleBarOverlay = { color: "#0c0c0e", symbolColor: "#d5d8de", height: 40 };
+  } else if (process.platform === "darwin") {
+    opts.titleBarStyle = "hiddenInset";
+  }
+  win = new BrowserWindow(opts);
   win.loadFile(path.join(__dirname, "renderer", "index.html"));
+  win.once("ready-to-show", () => win.show());
   win.on("close", () => {
     stopCore();
   });

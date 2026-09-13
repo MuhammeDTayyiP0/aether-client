@@ -11,8 +11,8 @@
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
-    <div class="app">
-      <header class="top">
+    <div class="shell">
+      <header class="titlebar">
         <div class="brand">
           <svg class="logo" viewBox="0 0 32 32" aria-hidden="true">
             <circle cx="16" cy="16" r="11.5" fill="none" stroke="currentColor" stroke-width="2" />
@@ -20,34 +20,37 @@
           </svg>
           <span>Aether</span>
         </div>
+        <span class="pill" id="pill">kesik</span>
         <button type="button" id="lang" class="lang">TR</button>
       </header>
 
-      <section class="stage">
-        <button type="button" class="ring" id="ring" data-state="down" aria-label="Bağlan">
-          <span class="ring-core"></span>
-        </button>
-        <p class="state" id="stateLabel">bağlanmamış</p>
-        <p class="node-name" id="nodeName">sunucu bekleniyor</p>
-      </section>
+      <main class="main">
+        <section class="stage">
+          <button type="button" class="ring" id="ring" data-state="down" aria-label="Bağlan">
+            <span class="ring-core"></span>
+          </button>
+          <p class="state" id="stateLabel">bağlanmamış</p>
+          <p class="node-name" id="nodeName">sunucu bekleniyor</p>
+        </section>
 
-      <button type="button" class="go" id="go">Bağlan</button>
-      <ol class="steps" id="steps" hidden></ol>
-      <p class="err" id="err" hidden></p>
-      <p class="hint" id="fetchHint">vlist.geldesat.com</p>
+        <button type="button" class="go" id="go">Bağlan</button>
+        <ol class="steps" id="steps" hidden></ol>
+        <p class="err" id="err" hidden></p>
 
-      <section class="block">
-        <div class="block-head">
-          <h2 id="nodesTitle">Sunucular</h2>
-          <button type="button" class="textbtn" id="reload">Yenile</button>
-        </div>
-        <ul class="nodes" id="nodes"></ul>
-        <button type="button" class="textbtn manual-toggle" id="manualToggle">Manuel ekle</button>
-        <div id="manual" class="manual" hidden>
-          <textarea id="paste" rows="3" spellcheck="false" placeholder="vless://…"></textarea>
-          <button type="button" class="ghost" id="add">Ekle</button>
-        </div>
-      </section>
+        <section class="block">
+          <div class="block-head">
+            <h2 id="nodesTitle">Sunucular</h2>
+            <button type="button" class="textbtn" id="reload">Yenile</button>
+          </div>
+          <p class="hint" id="fetchHint">vlist.geldesat.com</p>
+          <ul class="nodes" id="nodes"></ul>
+          <button type="button" class="textbtn manual-toggle" id="manualToggle">Manuel ekle</button>
+          <div id="manual" class="manual" hidden>
+            <textarea id="paste" rows="3" spellcheck="false" placeholder="vless://…"></textarea>
+            <button type="button" class="ghost" id="add">Ekle</button>
+          </div>
+        </section>
+      </main>
 
       <footer class="foot">
         <span id="proxyHint">127.0.0.1:1080</span>

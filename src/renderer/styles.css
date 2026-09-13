@@ -1,14 +1,15 @@
 :root {
-  --bg: #0b0b0c;
+  --bg: #0c0c0e;
   --fg: #eceae4;
-  --muted: #7e7c78;
-  --line: #262627;
-  --card: #141415;
+  --muted: #8a8780;
+  --line: #242428;
+  --card: #151518;
   --platinum: #d5d8de;
   --down: #4a4946;
-  --bad: #c45c4a;
+  --bad: #d07264;
   --font-ui: "Segoe UI", "SF Pro Text", "Helvetica Neue", sans-serif;
   --font-display: Georgia, "Iowan Old Style", "Times New Roman", serif;
+  --title-h: 40px;
 }
 
 * { box-sizing: border-box; }
@@ -17,21 +18,31 @@ body {
   background: var(--bg);
   color: var(--fg);
   font-family: var(--font-ui);
-  font-size: 14px;
+  font-size: 13px;
   line-height: 1.45;
   user-select: none;
+  overflow: hidden;
 }
-.app {
-  min-height: 100%;
-  padding: 20px 22px 14px;
+.shell {
+  height: 100%;
   display: flex;
   flex-direction: column;
-  gap: 12px;
 }
-.top {
+.titlebar {
+  height: var(--title-h);
+  flex-shrink: 0;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 10px;
+  padding: 0 16px;
+  padding-right: 148px;
+  border-bottom: 1px solid var(--line);
+  -webkit-app-region: drag;
+  app-region: drag;
+}
+.titlebar button {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
 }
 .brand {
   display: flex;
@@ -39,29 +50,50 @@ body {
   gap: 8px;
   color: var(--platinum);
   font-family: var(--font-display);
-  font-size: 15px;
-  letter-spacing: 0.18em;
+  font-size: 13px;
+  letter-spacing: 0.2em;
   text-transform: uppercase;
 }
-.logo { width: 18px; height: 18px; }
+.logo { width: 16px; height: 16px; }
+.pill {
+  margin-left: auto;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 3px 8px;
+  border-radius: 999px;
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+.pill.on { color: var(--platinum); box-shadow: inset 0 0 0 1px rgba(213,216,222,0.35); }
 .lang {
   border: 0;
   background: transparent;
   color: var(--muted);
   font: inherit;
   font-size: 11px;
-  letter-spacing: 0.16em;
+  letter-spacing: 0.14em;
   cursor: pointer;
+  padding: 4px 0;
+}
+.main {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 18px 20px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 .stage {
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 18px 0 8px;
+  padding: 10px 0 4px;
 }
 .ring {
-  width: 112px;
-  height: 112px;
+  width: 104px;
+  height: 104px;
   border-radius: 50%;
   border: 1.5px solid var(--down);
   background: transparent;
@@ -80,11 +112,10 @@ body {
   animation: pulse 1.15s ease-in-out infinite;
 }
 .ring-core {
-  width: 16px;
-  height: 16px;
+  width: 14px;
+  height: 14px;
   border-radius: 50%;
   background: var(--down);
-  transition: background 0.2s ease, transform 0.2s ease;
 }
 .ring[data-state="up"] .ring-core,
 .ring[data-state="busy"] .ring-core { background: var(--platinum); }
@@ -95,30 +126,30 @@ body {
   .ring[data-state="busy"] { animation: none; }
 }
 .state {
-  margin: 16px 0 0;
-  font-size: 11px;
-  letter-spacing: 0.2em;
+  margin: 14px 0 0;
+  font-size: 10px;
+  letter-spacing: 0.22em;
   text-transform: uppercase;
   color: var(--muted);
 }
 .node-name {
   margin: 6px 0 0;
   font-family: var(--font-display);
-  font-size: 22px;
+  font-size: 24px;
   letter-spacing: -0.03em;
 }
 .go {
-  height: 48px;
+  height: 46px;
   border: 0;
   border-radius: 999px;
   background: var(--platinum);
   color: var(--bg);
   font: inherit;
-  font-size: 15px;
-  letter-spacing: 0.06em;
+  font-size: 14px;
+  letter-spacing: 0.04em;
   cursor: pointer;
 }
-.go:hover { filter: brightness(1.05); }
+.go:hover { filter: brightness(1.06); }
 .go:disabled { opacity: 0.4; cursor: default; }
 .go.on {
   background: transparent;
@@ -133,22 +164,30 @@ body {
   flex-wrap: wrap;
   gap: 8px 14px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 10px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 .steps li[data-on="1"] { color: var(--fg); }
-.err { margin: 0; color: var(--bad); font-size: 12px; }
-.hint { margin: 0; color: var(--muted); font-size: 11px; letter-spacing: 0.04em; }
+.err {
+  margin: 0;
+  color: var(--bad);
+  font-size: 12px;
+  line-height: 1.4;
+  max-height: 4.2em;
+  overflow: auto;
+}
+.hint { margin: 0; color: var(--muted); font-size: 11px; }
 .block {
   background: var(--card);
   border-radius: 12px;
-  padding: 12px 12px 10px;
+  padding: 12px;
   display: flex;
   flex-direction: column;
   gap: 8px;
   flex: 1;
-  min-height: 0;
+  min-height: 120px;
+  box-shadow: inset 0 0 0 1px var(--line);
 }
 .block-head {
   display: flex;
@@ -157,7 +196,7 @@ body {
 }
 .block-head h2 {
   margin: 0;
-  font-size: 11px;
+  font-size: 10px;
   letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--muted);
@@ -169,7 +208,7 @@ body {
   color: var(--muted);
   font: inherit;
   font-size: 11px;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.06em;
   cursor: pointer;
   padding: 0;
 }
@@ -182,21 +221,21 @@ body {
   flex-direction: column;
   gap: 2px;
   overflow: auto;
-  max-height: 160px;
+  flex: 1;
 }
 .nodes li {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 9px 8px;
+  padding: 10px 8px;
   border-radius: 8px;
   cursor: pointer;
 }
 .nodes li:hover { background: rgba(255,255,255,0.03); }
-.nodes li.active { background: rgba(213, 216, 222, 0.07); }
+.nodes li.active { background: rgba(213, 216, 222, 0.08); }
 .dot {
-  width: 6px;
-  height: 6px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
   background: var(--down);
   flex-shrink: 0;
@@ -245,16 +284,16 @@ textarea:focus { outline: 1px solid var(--line); }
   cursor: pointer;
 }
 .foot {
+  flex-shrink: 0;
   display: flex;
   justify-content: space-between;
-  align-items: baseline;
+  align-items: center;
+  padding: 10px 18px 12px;
+  border-top: 1px solid var(--line);
   color: var(--muted);
   font-size: 11px;
 }
-.credit {
-  letter-spacing: 0.08em;
-  opacity: 0.55;
-  font-size: 10px;
-}
+.credit { letter-spacing: 0.08em; opacity: 0.5; font-size: 10px; }
 .empty { color: var(--muted); font-size: 12px; padding: 8px 4px; }
-button:not(:disabled), [role="button"]:not(:disabled) { cursor: pointer; }
+html[data-os="linux"] .titlebar { padding-right: 16px; }
+html[data-os="darwin"] .titlebar { padding-left: 78px; padding-right: 16px; }

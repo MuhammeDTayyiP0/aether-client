@@ -11,7 +11,7 @@ const copy = {
     empty: "Liste henüz yok. Yenile’ye bas.",
     proxy: "127.0.0.1:1080",
     noNode: "Sunucu yok — vlist.geldesat.com",
-    noCore: "Çekirdek yok. Release paketini kullan.",
+    noCore: "Çekirdek pakette. GitHub Release’i kullan — sing-box ayrı indirme.",
     reload: "Yenile",
     fetching: "liste alınıyor…",
     fetchOk: "vlist.geldesat.com",
@@ -30,7 +30,7 @@ const copy = {
     empty: "No list yet. Hit refresh.",
     proxy: "127.0.0.1:1080",
     noNode: "No server — vlist.geldesat.com",
-    noCore: "Core missing. Use a Release build.",
+    noCore: "Core is bundled. Use a GitHub Release — don’t install sing-box.",
     reload: "Refresh",
     fetching: "fetching list…",
     fetchOk: "vlist.geldesat.com",
@@ -65,24 +65,31 @@ function paint() {
   const p = selectedProfile();
   $("nodeName").textContent = p ? p.name : L.pick;
   const ring = $("ring");
+  const pill = $("pill");
   if (busy) {
     ring.dataset.state = "busy";
     $("stateLabel").textContent = L.busy;
     $("go").textContent = L.busy;
     $("go").disabled = true;
     $("go").classList.remove("on");
+    pill.textContent = L.busy;
+    pill.classList.remove("on");
   } else if (running) {
     ring.dataset.state = "up";
     $("stateLabel").textContent = L.up;
     $("go").textContent = L.stop;
     $("go").disabled = false;
     $("go").classList.add("on");
+    pill.textContent = L.up;
+    pill.classList.add("on");
   } else {
     ring.dataset.state = "down";
     $("stateLabel").textContent = L.down;
     $("go").textContent = L.go;
     $("go").disabled = !p;
     $("go").classList.remove("on");
+    pill.textContent = L.down;
+    pill.classList.remove("on");
   }
   const ul = $("nodes");
   ul.innerHTML = "";
@@ -149,6 +156,7 @@ async function refresh() {
   locale = s.locale || locale;
   profiles = s.profiles || [];
   running = Boolean(s.running);
+  if (s.platform) document.documentElement.dataset.os = s.platform;
   if (s.activeId) selected = s.activeId;
   else if (!selected && profiles[0]) selected = profiles[0].id;
   if (s.lastError) {

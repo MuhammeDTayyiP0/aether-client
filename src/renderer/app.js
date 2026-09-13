@@ -156,6 +156,7 @@ async function refresh() {
   locale = s.locale || locale;
   profiles = s.profiles || [];
   running = Boolean(s.running);
+  exitIp = s.exitIp || "";
   if (s.platform) document.documentElement.dataset.os = s.platform;
   if (s.activeId) selected = s.activeId;
   else if (!selected && profiles[0]) selected = profiles[0].id;

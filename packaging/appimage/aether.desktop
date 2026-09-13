@@ -1,0 +1,7 @@
+[Desktop Entry]
+Name=Aether
+Exec=aether-core
+Icon=aether
+Type=Application
+Categories=Network;
+Terminal=true

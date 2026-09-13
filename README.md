@@ -1,36 +1,23 @@
-# Aether Client (core)
+# Aether Client
 
-Bu repo **istemci**. Cihazda çalışır (Windows / Linux / eski Pardus). Resmi sing-box statik ikilisini paketler. UUID ve alan adı **gömülmez**.
+`main`'e her push **otomatik Release** basar:
 
-Sunucu için: [aether-server](https://github.com/MuhammeDTayyiP0/aether-server)
-
-## Paket üret
-
-GitHub → Actions → **Aether core packages** → Run workflow
-
-Çıkanlar:
-
-| Dosya | Nerede |
+| Dosya | Kullan |
 | --- | --- |
-| `aether-core-windows-amd64.zip` | Windows |
-| `aether-core-linux-amd64.tar.gz` | Eski Pardus / Debian 10+ (tercih et) |
-| `aether-core_1.0.0_amd64.deb` | Debian/Ubuntu |
+| `aether-windows-amd64.zip` | Windows |
+| `aether-linux-amd64.tar.gz` | Eski Pardus / Debian 10+ (tercih) |
+| `aether_1.0.N_amd64.deb` | Debian / Ubuntu / Pardus |
+| `Aether-x86_64.AppImage` | AppImage (FUSE yoksa `--appimage-extract-and-run`) |
 
-AppImage FUSE ister; kilitli tahtalarda **tarball** kullan.
+Sunucu: [aether-server](https://github.com/MuhammeDTayyiP0/aether-server)
 
-## Cihazda config
+## Nasıl
 
-Aether panel → Atölye → **sing-box.json** (TUN'suz, 1080) veya **sing-box-tun.json** (yönetici gerekir).
+1. Bu repoya push (veya Actions → Release → Run workflow)
+2. [Releases](https://github.com/MuhammeDTayyiP0/aether-client/releases) sayfasından indir
+3. Aether panel → Atölye → `sing-box.json` kaydet:
+   - Linux: `~/.config/aether/config.json`
+   - Windows: `%APPDATA%\Aether\config.json`
+4. Çalıştır: `aether.cmd` / `./bin/aether` / `aether`
 
-- Linux: `~/.config/aether/config.json`
-- Windows: `%APPDATA%\Aether\config.json`
-
-```bash
-mkdir -p ~/.config/aether
-# JSON'u kaydet
-./bin/aether
-```
-
-TUN yoksa tarayıcı proxy: `127.0.0.1:1080`
-
-`config.json` bu repoya **commit edilmez**.
+`config.json` git'e **girmez**.

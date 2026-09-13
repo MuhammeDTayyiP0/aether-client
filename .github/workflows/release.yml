@@ -1,88 +1,108 @@
-name: Aether core packages
+name: Release
 
 on:
-  workflow_dispatch:
   push:
-    tags:
-      - "v*"
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
-  pack:
+  release:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          - goos: windows
-            goarch: amd64
-            asset: aether-core-windows-amd64.zip
-          - goos: linux
-            goarch: amd64
-            asset: aether-core-linux-amd64.tar.gz
     steps:
       - uses: actions/checkout@v4
+
       - name: Resolve sing-box
+        id: sb
         run: |
           TAG=$(curl -fsSL https://api.github.com/repos/SagerNet/sing-box/releases/latest | jq -r .tag_name)
-          echo "TAG=$TAG" >> "$GITHUB_ENV"
-          echo "VER=${TAG#v}" >> "$GITHUB_ENV"
-      - name: Fetch binary
-        run: |
-          set -euo pipefail
-          mkdir -p dist/pack
-          if [ "${{ matrix.goos }}" = "windows" ]; then
-            curl -fsSL -o sb.zip "https://github.com/SagerNet/sing-box/releases/download/${TAG}/sing-box-${VER}-windows-amd64.zip"
-            unzip -j sb.zip "*/sing-box.exe" -d dist/pack
-            mv dist/pack/sing-box.exe dist/pack/aether-core.exe
-            cp scripts/aether.cmd dist/pack/aether.cmd
-            printf '%s\n' 'Aether Core (Windows)' '1. Aether panel Atolye: sing-box.json' '2. Kaydet: %APPDATA%\Aether\config.json' '3. aether.cmd' 'TUN icin Yonetici. TUN yoksa 127.0.0.1:1080' > dist/pack/README.txt
-            (cd dist/pack && zip -r "../${{ matrix.asset }}" .)
-          else
-            curl -fsSL -o sb.tar.gz "https://github.com/SagerNet/sing-box/releases/download/${TAG}/sing-box-${VER}-linux-amd64.tar.gz"
-            tar -xzf sb.tar.gz
-            mkdir -p dist/pack/bin
-            cp sing-box-*/sing-box dist/pack/bin/aether-core
-            chmod +x dist/pack/bin/aether-core
-            cp scripts/aether dist/pack/bin/aether
-            chmod +x dist/pack/bin/aether
-            printf '%s\n' 'Aether Core (Linux, statik — Pardus 19 / Debian 10+)' 'mkdir -p ~/.config/aether' 'panelden sing-box.json -> ~/.config/aether/config.json' './bin/aether' > dist/pack/README.txt
-            tar -C dist/pack -czf "dist/${{ matrix.asset }}" .
-          fi
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.asset }}
-          path: dist/${{ matrix.asset }}
+          VER="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "ver=$VER" >> "$GITHUB_OUTPUT"
+          echo "Using sing-box $TAG"
 
-  deb:
-    needs: pack
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: aether-core-linux-amd64.tar.gz
-      - name: Build .deb
+      - name: Fetch cores
         run: |
           set -euo pipefail
-          mkdir -p pkg/usr/lib/aether pkg/usr/bin pkg/DEBIAN
-          tar -xzf aether-core-linux-amd64.tar.gz -C pkg/usr/lib/aether
-          find pkg/usr/lib/aether -name aether-core -exec chmod 755 {} \;
-          cat > pkg/usr/bin/aether <<'EOF'
-          #!/bin/sh
-          CONF="${AETHER_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/aether/config.json}"
-          exec /usr/lib/aether/bin/aether-core run -c "$CONF"
-          EOF
-          chmod 755 pkg/usr/bin/aether
-          cat > pkg/DEBIAN/control <<EOF
-          Package: aether-core
-          Version: 1.0.0
-          Section: net
-          Priority: optional
-          Architecture: amd64
-          Maintainer: Aether <aether@local>
-          Description: Static sing-box core for the Aether panel.
-          EOF
-          dpkg-deb --build pkg aether-core_1.0.0_amd64.deb
-      - uses: actions/upload-artifact@v4
+          VER='${{ steps.sb.outputs.ver }}'
+          TAG='${{ steps.sb.outputs.tag }}'
+          mkdir -p work/win work/linux
+          curl -fsSL -o win.zip "https://github.com/SagerNet/sing-box/releases/download/${TAG}/sing-box-${VER}-windows-amd64.zip"
+          curl -fsSL -o linux.tar.gz "https://github.com/SagerNet/sing-box/releases/download/${TAG}/sing-box-${VER}-linux-amd64.tar.gz"
+          unzip -j win.zip "*/sing-box.exe" -d work/win
+          tar -xzf linux.tar.gz
+          cp sing-box-*/sing-box work/linux/aether-core
+          chmod +x work/linux/aether-core
+          mv work/win/sing-box.exe work/win/aether-core.exe
+
+      - name: Windows zip
+        run: |
+          set -euo pipefail
+          mkdir -p dist pack/windows
+          cp work/win/aether-core.exe pack/windows/
+          cp scripts/aether.cmd pack/windows/aether.cmd
+          cp config.example.json pack/windows/
+          printf '%s\n' \
+            'Aether Client (Windows)' \
+            '1. Aether panel Atolye -> sing-box.json' \
+            '2. Kaydet: %APPDATA%\Aether\config.json' \
+            '3. aether.cmd calistir' \
+            'TUN icin Yonetici. Yoksa tarayici proxy 127.0.0.1:1080' \
+            > pack/windows/README.txt
+          (cd pack/windows && zip -r ../../dist/aether-windows-amd64.zip .)
+
+      - name: Linux tarball
+        run: |
+          set -euo pipefail
+          mkdir -p pack/linux/bin
+          cp work/linux/aether-core pack/linux/bin/aether-core
+          cp scripts/aether pack/linux/bin/aether
+          chmod +x pack/linux/bin/aether pack/linux/bin/aether-core
+          cp config.example.json pack/linux/
+          printf '%s\n' \
+            'Aether Client (Linux static — Pardus 19 / Debian 10+)' \
+            'mkdir -p ~/.config/aether' \
+            'panel sing-box.json -> ~/.config/aether/config.json' \
+            './bin/aether' \
+            > pack/linux/README.txt
+          tar -C pack/linux -czf dist/aether-linux-amd64.tar.gz .
+
+      - name: Debian package
+        run: |
+          set -euo pipefail
+          VER="1.0.${{ github.run_number }}"
+          mkdir -p pkg/usr/lib/aether/bin pkg/usr/bin pkg/DEBIAN
+          cp work/linux/aether-core pkg/usr/lib/aether/bin/aether-core
+          cp packaging/linux/aether-wrapper pkg/usr/bin/aether
+          chmod 755 pkg/usr/lib/aether/bin/aether-core pkg/usr/bin/aether
+          sed "s/^Version:.*/Version: ${VER}/" packaging/deb/control > pkg/DEBIAN/control
+          dpkg-deb --build pkg "dist/aether_${VER}_amd64.deb"
+
+      - name: AppImage
+        run: |
+          set -euo pipefail
+          mkdir -p AppDir/usr/bin
+          cp work/linux/aether-core AppDir/usr/bin/aether-core
+          cp packaging/appimage/AppRun AppDir/AppRun
+          cp packaging/appimage/aether.desktop AppDir/aether.desktop
+          chmod +x AppDir/AppRun AppDir/usr/bin/aether-core
+          python3 packaging/appimage/make_icon.py AppDir/aether.png
+          cp AppDir/aether.png AppDir/.DirIcon
+          curl -fsSL -o appimagetool "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage"
+          chmod +x appimagetool
+          ARCH=x86_64 ./appimagetool --appimage-extract-and-run AppDir dist/Aether-x86_64.AppImage
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
-          name: aether-core_1.0.0_amd64.deb
-          path: aether-core_1.0.0_amd64.deb
+          tag_name: v1.0.${{ github.run_number }}
+          name: Aether v1.0.${{ github.run_number }}
+          generate_release_notes: true
+          make_latest: true
+          files: |
+            dist/aether-windows-amd64.zip
+            dist/aether-linux-amd64.tar.gz
+            dist/aether_1.0.${{ github.run_number }}_amd64.deb
+            dist/Aether-x86_64.AppImage

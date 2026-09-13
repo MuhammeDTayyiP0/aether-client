@@ -1,0 +1,88 @@
+name: Aether core packages
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  pack:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: windows
+            goarch: amd64
+            asset: aether-core-windows-amd64.zip
+          - goos: linux
+            goarch: amd64
+            asset: aether-core-linux-amd64.tar.gz
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve sing-box
+        run: |
+          TAG=$(curl -fsSL https://api.github.com/repos/SagerNet/sing-box/releases/latest | jq -r .tag_name)
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          echo "VER=${TAG#v}" >> "$GITHUB_ENV"
+      - name: Fetch binary
+        run: |
+          set -euo pipefail
+          mkdir -p dist/pack
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            curl -fsSL -o sb.zip "https://github.com/SagerNet/sing-box/releases/download/${TAG}/sing-box-${VER}-windows-amd64.zip"
+            unzip -j sb.zip "*/sing-box.exe" -d dist/pack
+            mv dist/pack/sing-box.exe dist/pack/aether-core.exe
+            cp scripts/aether.cmd dist/pack/aether.cmd
+            printf '%s\n' 'Aether Core (Windows)' '1. Aether panel Atolye: sing-box.json' '2. Kaydet: %APPDATA%\Aether\config.json' '3. aether.cmd' 'TUN icin Yonetici. TUN yoksa 127.0.0.1:1080' > dist/pack/README.txt
+            (cd dist/pack && zip -r "../${{ matrix.asset }}" .)
+          else
+            curl -fsSL -o sb.tar.gz "https://github.com/SagerNet/sing-box/releases/download/${TAG}/sing-box-${VER}-linux-amd64.tar.gz"
+            tar -xzf sb.tar.gz
+            mkdir -p dist/pack/bin
+            cp sing-box-*/sing-box dist/pack/bin/aether-core
+            chmod +x dist/pack/bin/aether-core
+            cp scripts/aether dist/pack/bin/aether
+            chmod +x dist/pack/bin/aether
+            printf '%s\n' 'Aether Core (Linux, statik — Pardus 19 / Debian 10+)' 'mkdir -p ~/.config/aether' 'panelden sing-box.json -> ~/.config/aether/config.json' './bin/aether' > dist/pack/README.txt
+            tar -C dist/pack -czf "dist/${{ matrix.asset }}" .
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}
+
+  deb:
+    needs: pack
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: aether-core-linux-amd64.tar.gz
+      - name: Build .deb
+        run: |
+          set -euo pipefail
+          mkdir -p pkg/usr/lib/aether pkg/usr/bin pkg/DEBIAN
+          tar -xzf aether-core-linux-amd64.tar.gz -C pkg/usr/lib/aether
+          find pkg/usr/lib/aether -name aether-core -exec chmod 755 {} \;
+          cat > pkg/usr/bin/aether <<'EOF'
+          #!/bin/sh
+          CONF="${AETHER_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/aether/config.json}"
+          exec /usr/lib/aether/bin/aether-core run -c "$CONF"
+          EOF
+          chmod 755 pkg/usr/bin/aether
+          cat > pkg/DEBIAN/control <<EOF
+          Package: aether-core
+          Version: 1.0.0
+          Section: net
+          Priority: optional
+          Architecture: amd64
+          Maintainer: Aether <aether@local>
+          Description: Static sing-box core for the Aether panel.
+          EOF
+          dpkg-deb --build pkg aether-core_1.0.0_amd64.deb
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aether-core_1.0.0_amd64.deb
+          path: aether-core_1.0.0_amd64.deb

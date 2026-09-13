@@ -1,0 +1,18 @@
+#!/bin/sh
+# Linux launcher — old Pardus / Debian 10+ (POSIX sh)
+CONF="${AETHER_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/aether/config.json}"
+ROOT="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
+CORE="$ROOT/bin/aether-core"
+if [ ! -x "$CORE" ]; then
+  CORE="$(command -v aether-core || true)"
+fi
+if [ -z "$CORE" ] || [ ! -x "$CORE" ]; then
+  echo "aether-core bulunamadı" >&2
+  exit 1
+fi
+if [ ! -f "$CONF" ]; then
+  echo "config yok: $CONF" >&2
+  echo "Aether panel → Atölye → sing-box.json dosyasını buraya koy." >&2
+  exit 1
+fi
+exec "$CORE" run -c "$CONF"

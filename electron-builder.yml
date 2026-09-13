@@ -29,3 +29,6 @@ linux:
     Name: Aether
     Comment: Aether client
     Categories: Network
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true

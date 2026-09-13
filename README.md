@@ -1,37 +1,18 @@
 # Aether Client
 
-Electron masaüstü uygulaması. Bağlan / Kes, düğüm ekle (`vless://` veya sing-box JSON), çekirdek olarak sing-box.
+Electron masaüstü istemci. Açılınca sunucuyu `https://vlist.geldesat.com/list.json` adresinden çeker.
 
-`main`'e push → GitHub **Release**:
+`main`'e push → Release: Windows zip, Linux AppImage / .deb / .tar.gz
 
-- Windows `.zip`
-- Linux `.AppImage`
-- Linux `.deb`
-- Linux `.tar.gz` (eski Pardus)
+## Listeyi yükle
 
-Sunucu: [aether-server](https://github.com/MuhammeDTayyiP0/aether-server)
+`vlist/` klasörünü `vlist.geldesat.com` köküne koy. `list.json` içine paneldeki `vless://` satırını yaz.
 
 ## Kullanım
 
-1. [Releases](https://github.com/MuhammeDTayyiP0/aether-client/releases) içinden paketini indir
-2. Aç → `vless://` veya Aether panel Atölye JSON yapıştır → **Ekle**
+1. [Releases](https://github.com/MuhammeDTayyiP0/aether-client/releases) paketini indir
+2. Aç — düğüm otomatik gelir
 3. **Bağlan**
-4. Proxy: `127.0.0.1:1080` (tarayıcı SOCKS/HTTP)
+4. Proxy: `127.0.0.1:1080`
 
-Eski Pardus’ta AppImage FUSE istemezse:
-
-```bash
-./aether-*-linux-amd64.AppImage --appimage-extract-and-run
-```
-
-veya `.tar.gz` / `.deb`.
-
-## Geliştirme
-
-```bash
-# linux çekirdek
-mkdir -p resources/bin/linux
-# sing-box ikilisini aether-core adıyla koy
-npm install
-npx electron .
-```
+Uygulama kapanınca veya Windows kapanırken tünel kesilir.

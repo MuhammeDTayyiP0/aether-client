@@ -7,10 +7,14 @@ contextBridge.exposeInMainWorld("aether", {
   removeProfile: (id) => ipcRenderer.invoke("remove-profile", id),
   connect: (id) => ipcRenderer.invoke("connect", id),
   disconnect: () => ipcRenderer.invoke("disconnect"),
-  openProxy: () => ipcRenderer.invoke("open-proxy"),
+  refreshVlist: () => ipcRenderer.invoke("refresh-vlist"),
   onStatus: (fn) => {
-    const h = (_e, payload) => fn(payload);
-    ipcRenderer.on("status", h);
-    return () => ipcRenderer.removeListener("status", h);
+    ipcRenderer.on("status", (_e, payload) => fn(payload));
+  },
+  onVlist: (fn) => {
+    ipcRenderer.on("vlist", (_e, payload) => fn(payload));
+  },
+  onVlistError: (fn) => {
+    ipcRenderer.on("vlist-error", (_e, payload) => fn(payload));
   },
 });

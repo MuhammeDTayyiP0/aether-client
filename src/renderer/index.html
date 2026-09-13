@@ -13,40 +13,45 @@
   <body>
     <div class="app">
       <header class="top">
-        <p class="mark">Aether</p>
-        <button type="button" id="lang" class="lang" aria-label="Language">TR</button>
+        <div class="brand">
+          <svg class="logo" viewBox="0 0 32 32" aria-hidden="true">
+            <circle cx="16" cy="16" r="11.5" fill="none" stroke="currentColor" stroke-width="2" />
+            <circle cx="16" cy="16" r="4" fill="currentColor" />
+          </svg>
+          <span>Aether</span>
+        </div>
+        <button type="button" id="lang" class="lang">TR</button>
       </header>
 
       <section class="stage">
-        <div class="ring" id="ring" data-state="down">
+        <button type="button" class="ring" id="ring" data-state="down" aria-label="Bağlan">
           <span class="ring-core"></span>
-        </div>
+        </button>
         <p class="state" id="stateLabel">bağlanmamış</p>
-        <p class="node-name" id="nodeName">düğüm seç</p>
+        <p class="node-name" id="nodeName">sunucu bekleniyor</p>
       </section>
 
       <button type="button" class="go" id="go">Bağlan</button>
-
       <ol class="steps" id="steps" hidden></ol>
-
       <p class="err" id="err" hidden></p>
+      <p class="hint" id="fetchHint">vlist.geldesat.com</p>
 
       <section class="block">
         <div class="block-head">
-          <h2 id="nodesTitle">Düğümler</h2>
+          <h2 id="nodesTitle">Sunucular</h2>
+          <button type="button" class="textbtn" id="reload">Yenile</button>
         </div>
         <ul class="nodes" id="nodes"></ul>
-        <textarea
-          id="paste"
-          rows="3"
-          spellcheck="false"
-          placeholder="vless://… veya sing-box JSON"
-        ></textarea>
-        <button type="button" class="ghost" id="add">Ekle</button>
+        <button type="button" class="textbtn manual-toggle" id="manualToggle">Manuel ekle</button>
+        <div id="manual" class="manual" hidden>
+          <textarea id="paste" rows="3" spellcheck="false" placeholder="vless://…"></textarea>
+          <button type="button" class="ghost" id="add">Ekle</button>
+        </div>
       </section>
 
       <footer class="foot">
-        <span id="proxyHint">SOCKS/HTTP 127.0.0.1:1080</span>
+        <span id="proxyHint">127.0.0.1:1080</span>
+        <span class="credit">Made by MTE</span>
       </footer>
     </div>
     <script src="app.js"></script>

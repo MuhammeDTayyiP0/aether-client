@@ -3,31 +3,39 @@ const copy = {
     down: "bağlanmamış",
     busy: "bağlanıyor",
     up: "oturum açık",
-    pick: "düğüm seç",
+    pick: "sunucu bekleniyor",
     go: "Bağlan",
     stop: "Kes",
-    nodes: "Düğümler",
+    nodes: "Sunucular",
     add: "Ekle",
-    empty: "Atölye’den JSON veya vless:// yapıştır.",
-    proxy: "SOCKS/HTTP 127.0.0.1:1080",
-    noNode: "Önce düğüm ekle",
-    noCore: "Çekirdek yok. GitHub Release paketini kullan.",
-    steps: ["DNS", "TLS 1.3", "Cloudflare kenarı", "WebSocket", "Kimlik"],
+    empty: "Liste henüz yok. Yenile’ye bas.",
+    proxy: "127.0.0.1:1080",
+    noNode: "Sunucu yok — vlist.geldesat.com",
+    noCore: "Çekirdek yok. Release paketini kullan.",
+    reload: "Yenile",
+    fetching: "liste alınıyor…",
+    fetchOk: "vlist.geldesat.com",
+    manual: "Manuel ekle",
+    steps: ["DNS", "TLS", "Kenar", "Yol", "Kimlik"],
   },
   en: {
     down: "disconnected",
     busy: "connecting",
     up: "session up",
-    pick: "pick a node",
+    pick: "waiting for node",
     go: "Connect",
     stop: "Disconnect",
-    nodes: "Nodes",
+    nodes: "Servers",
     add: "Add",
-    empty: "Paste Lab JSON or vless://",
-    proxy: "SOCKS/HTTP 127.0.0.1:1080",
-    noNode: "Add a node first",
-    noCore: "Core missing. Install a GitHub Release build.",
-    steps: ["DNS", "TLS 1.3", "Cloudflare edge", "WebSocket", "Identity"],
+    empty: "No list yet. Hit refresh.",
+    proxy: "127.0.0.1:1080",
+    noNode: "No server — vlist.geldesat.com",
+    noCore: "Core missing. Use a Release build.",
+    reload: "Refresh",
+    fetching: "fetching list…",
+    fetchOk: "vlist.geldesat.com",
+    manual: "Add manually",
+    steps: ["DNS", "TLS", "Edge", "Path", "Identity"],
   },
 };
 
@@ -39,11 +47,9 @@ let busy = false;
 let stepTimer = null;
 
 const $ = (id) => document.getElementById(id);
-
 function t(key) {
   return copy[locale][key];
 }
-
 function selectedProfile() {
   return profiles.find((p) => p.id === selected) || profiles[0] || null;
 }
@@ -53,12 +59,11 @@ function paint() {
   $("lang").textContent = locale.toUpperCase();
   $("nodesTitle").textContent = L.nodes;
   $("add").textContent = L.add;
-  $("paste").placeholder = L.empty;
+  $("reload").textContent = L.reload;
+  $("manualToggle").textContent = L.manual;
   $("proxyHint").textContent = L.proxy;
-
   const p = selectedProfile();
   $("nodeName").textContent = p ? p.name : L.pick;
-
   const ring = $("ring");
   if (busy) {
     ring.dataset.state = "busy";
@@ -79,7 +84,6 @@ function paint() {
     $("go").disabled = !p;
     $("go").classList.remove("on");
   }
-
   const ul = $("nodes");
   ul.innerHTML = "";
   if (!profiles.length) {
@@ -92,7 +96,9 @@ function paint() {
   profiles.forEach((n) => {
     const li = document.createElement("li");
     if (n.id === (selected || (p && p.id))) li.classList.add("active");
-    li.innerHTML = `<span class="dot"></span><span class="meta"><b></b><span></span></span><button type="button" class="kill" aria-label="remove">×</button>`;
+    li.innerHTML =
+      '<span class="dot"></span><span class="meta"><b></b><span></span></span>' +
+      (n.source === "local" ? '<button type="button" class="kill" aria-label="remove">×</button>' : "");
     li.querySelector("b").textContent = n.name;
     li.querySelector("span span").textContent = n.domain;
     li.addEventListener("click", (ev) => {
@@ -100,12 +106,15 @@ function paint() {
       selected = n.id;
       paint();
     });
-    li.querySelector(".kill").addEventListener("click", async (ev) => {
-      ev.stopPropagation();
-      profiles = await window.aether.removeProfile(n.id);
-      if (selected === n.id) selected = profiles[0] ? profiles[0].id : null;
-      paint();
-    });
+    const kill = li.querySelector(".kill");
+    if (kill) {
+      kill.addEventListener("click", async (ev) => {
+        ev.stopPropagation();
+        profiles = await window.aether.removeProfile(n.id);
+        if (selected === n.id) selected = profiles[0] ? profiles[0].id : null;
+        paint();
+      });
+    }
     ul.appendChild(li);
   });
 }
@@ -114,8 +123,7 @@ function runSteps() {
   const box = $("steps");
   box.hidden = false;
   box.innerHTML = "";
-  const labels = copy[locale].steps;
-  labels.forEach((s) => {
+  copy[locale].steps.forEach((s) => {
     const li = document.createElement("li");
     li.textContent = s;
     box.appendChild(li);
@@ -125,12 +133,11 @@ function runSteps() {
     if (i < box.children.length) {
       box.children[i].dataset.on = "1";
       i += 1;
-      stepTimer = setTimeout(tick, 280);
+      stepTimer = setTimeout(tick, 240);
     }
   };
   tick();
 }
-
 function clearSteps() {
   clearTimeout(stepTimer);
   $("steps").hidden = true;
@@ -152,6 +159,7 @@ async function refresh() {
     $("err").hidden = false;
     $("err").textContent = t("noCore");
   }
+  if (s.remoteAt) $("fetchHint").textContent = t("fetchOk");
   paint();
 }
 
@@ -160,12 +168,13 @@ $("lang").addEventListener("click", async () => {
   await window.aether.setLocale(locale);
   paint();
 });
-
+$("manualToggle").addEventListener("click", () => {
+  $("manual").hidden = !$("manual").hidden;
+});
 $("add").addEventListener("click", async () => {
-  const text = $("paste").value;
   $("err").hidden = true;
   try {
-    profiles = await window.aether.addProfile(text);
+    profiles = await window.aether.addProfile($("paste").value);
     $("paste").value = "";
     selected = profiles[profiles.length - 1].id;
     paint();
@@ -174,8 +183,23 @@ $("add").addEventListener("click", async () => {
     $("err").textContent = e.message || String(e);
   }
 });
+$("reload").addEventListener("click", async () => {
+  $("fetchHint").textContent = t("fetching");
+  $("err").hidden = true;
+  try {
+    const r = await window.aether.refreshVlist();
+    profiles = r.profiles || [];
+    if (profiles[0]) selected = profiles[0].id;
+    $("fetchHint").textContent = t("fetchOk");
+    paint();
+  } catch (e) {
+    $("fetchHint").textContent = t("fetchOk");
+    $("err").hidden = false;
+    $("err").textContent = e.message || String(e);
+  }
+});
 
-$("go").addEventListener("click", async () => {
+async function toggle() {
   $("err").hidden = true;
   if (running) {
     await window.aether.disconnect();
@@ -206,7 +230,9 @@ $("go").addEventListener("click", async () => {
     if (!running) clearSteps();
     paint();
   }
-});
+}
+$("go").addEventListener("click", toggle);
+$("ring").addEventListener("click", toggle);
 
 window.aether.onStatus((s) => {
   running = Boolean(s.running);
@@ -220,5 +246,17 @@ window.aether.onStatus((s) => {
   }
   paint();
 });
+window.aether.onVlist((r) => {
+  profiles = r.profiles || [];
+  if (profiles[0] && !selected) selected = profiles[0].id;
+  $("fetchHint").textContent = t("fetchOk");
+  $("err").hidden = true;
+  paint();
+});
+window.aether.onVlistError((e) => {
+  $("err").hidden = false;
+  $("err").textContent = e.message || t("noNode");
+});
 
+$("fetchHint").textContent = copy.tr.fetching;
 refresh();

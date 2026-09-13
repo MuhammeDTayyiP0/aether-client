@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   linux:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -21,20 +21,50 @@ jobs:
           set -euo pipefail
           TAG=$(curl -fsSL https://api.github.com/repos/SagerNet/sing-box/releases/latest | jq -r .tag_name)
           VER="${TAG#v}"
-          mkdir -p resources/bin/linux
+          mkdir -p resources/bin/linux build
           curl -fsSL -o linux.tgz "https://github.com/SagerNet/sing-box/releases/download/${TAG}/sing-box-${VER}-linux-amd64.tar.gz"
           tar -xzf linux.tgz
           cp sing-box-*/sing-box resources/bin/linux/aether-core
           chmod +x resources/bin/linux/aether-core
-          mkdir -p build
           python3 packaging/make_icon.py build/icon.png
       - run: npm install
-      - name: Build Linux
+      - name: Build deb + tar.gz
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
         run: |
-          npx electron-builder --linux AppImage deb tar.gz --publish never \
+          echo "electron-builder start $(date -u +%H:%M:%S)"
+          npx electron-builder --linux deb tar.gz --publish never \
             --config.extraMetadata.version=1.1.${{ github.run_number }}
+          echo "electron-builder done $(date -u +%H:%M:%S)"
+          ls -lh dist
+      - name: AppImage (no FUSE)
+        run: |
+          set -euo pipefail
+          VER="1.1.${{ github.run_number }}"
+          APPDIR=dist/Aether.AppDir
+          rm -rf "$APPDIR"
+          mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/lib"
+          cp -a dist/linux-unpacked/. "$APPDIR/usr/lib/aether/"
+          cat > "$APPDIR/AppRun" <<'EOF'
+          #!/bin/sh
+          HERE="$(dirname "$(readlink -f "$0")")"
+          exec "$HERE/usr/lib/aether/aether" "$@"
+          EOF
+          chmod +x "$APPDIR/AppRun"
+          cat > "$APPDIR/aether.desktop" <<EOF
+          [Desktop Entry]
+          Name=Aether
+          Exec=aether
+          Icon=aether
+          Type=Application
+          Categories=Network;
+          EOF
+          cp build/icon.png "$APPDIR/aether.png"
+          cp build/icon.png "$APPDIR/.DirIcon"
+          curl -fsSL -o appimagetool "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage"
+          chmod +x appimagetool
+          ARCH=x86_64 ./appimagetool --appimage-extract-and-run "$APPDIR" "dist/aether-${VER}-linux-amd64.AppImage"
+          ls -lh dist/*.AppImage
       - uses: actions/upload-artifact@v4
         with:
           name: linux
@@ -56,11 +86,10 @@ jobs:
           set -euo pipefail
           TAG=$(curl -fsSL https://api.github.com/repos/SagerNet/sing-box/releases/latest | jq -r .tag_name)
           VER="${TAG#v}"
-          mkdir -p resources/bin/win
+          mkdir -p resources/bin/win build
           curl -fsSL -o win.zip "https://github.com/SagerNet/sing-box/releases/download/${TAG}/sing-box-${VER}-windows-amd64.zip"
           unzip -j win.zip "*/sing-box.exe" -d resources/bin/win
           mv resources/bin/win/sing-box.exe resources/bin/win/aether-core.exe
-          mkdir -p build
           python packaging/make_icon.py build/icon.png
       - run: npm install
       - name: Build Windows
@@ -80,6 +109,7 @@ jobs:
         with:
           merge-multiple: true
           path: out
+      - run: ls -lh out
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: v1.1.${{ github.run_number }}

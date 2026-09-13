@@ -3,6 +3,7 @@ productName: Aether
 copyright: Aether
 asar: true
 forceCodeSigning: false
+compression: store
 directories:
   output: dist
   buildResources: build
@@ -21,7 +22,6 @@ win:
   artifactName: aether-${version}-windows-amd64.zip
 linux:
   target:
-    - AppImage
     - deb
     - tar.gz
   category: Network

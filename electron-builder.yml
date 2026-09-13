@@ -1,0 +1,31 @@
+appId: app.aether.client
+productName: Aether
+copyright: Aether
+asar: true
+directories:
+  output: dist
+  buildResources: build
+files:
+  - src/**/*
+  - package.json
+extraResources:
+  - from: resources/bin/${os}
+    to: bin
+    filter:
+      - "**/*"
+win:
+  target:
+    - zip
+  artifactName: aether-${version}-windows-amd64.zip
+linux:
+  target:
+    - AppImage
+    - deb
+    - tar.gz
+  category: Network
+  executableName: aether
+  artifactName: aether-${version}-linux-amd64.${ext}
+  desktop:
+    Name: Aether
+    Comment: Aether client
+    Categories: Network

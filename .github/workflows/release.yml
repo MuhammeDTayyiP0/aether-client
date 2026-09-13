@@ -14,95 +14,48 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Resolve sing-box
-        id: sb
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Fetch sing-box cores
         run: |
+          set -euo pipefail
           TAG=$(curl -fsSL https://api.github.com/repos/SagerNet/sing-box/releases/latest | jq -r .tag_name)
           VER="${TAG#v}"
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "ver=$VER" >> "$GITHUB_OUTPUT"
-          echo "Using sing-box $TAG"
-
-      - name: Fetch cores
-        run: |
-          set -euo pipefail
-          VER='${{ steps.sb.outputs.ver }}'
-          TAG='${{ steps.sb.outputs.tag }}'
-          mkdir -p work/win work/linux
+          mkdir -p resources/bin/win resources/bin/linux
           curl -fsSL -o win.zip "https://github.com/SagerNet/sing-box/releases/download/${TAG}/sing-box-${VER}-windows-amd64.zip"
-          curl -fsSL -o linux.tar.gz "https://github.com/SagerNet/sing-box/releases/download/${TAG}/sing-box-${VER}-linux-amd64.tar.gz"
-          unzip -j win.zip "*/sing-box.exe" -d work/win
-          tar -xzf linux.tar.gz
-          cp sing-box-*/sing-box work/linux/aether-core
-          chmod +x work/linux/aether-core
-          mv work/win/sing-box.exe work/win/aether-core.exe
+          curl -fsSL -o linux.tgz "https://github.com/SagerNet/sing-box/releases/download/${TAG}/sing-box-${VER}-linux-amd64.tar.gz"
+          unzip -j win.zip "*/sing-box.exe" -d resources/bin/win
+          mv resources/bin/win/sing-box.exe resources/bin/win/aether-core.exe
+          tar -xzf linux.tgz
+          cp sing-box-*/sing-box resources/bin/linux/aether-core
+          chmod +x resources/bin/linux/aether-core resources/bin/win/aether-core.exe
 
-      - name: Windows zip
+      - name: Icon
         run: |
-          set -euo pipefail
-          mkdir -p dist pack/windows
-          cp work/win/aether-core.exe pack/windows/
-          cp scripts/aether.cmd pack/windows/aether.cmd
-          cp config.example.json pack/windows/
-          printf '%s\n' \
-            'Aether Client (Windows)' \
-            '1. Aether panel Atolye -> sing-box.json' \
-            '2. Kaydet: %APPDATA%\Aether\config.json' \
-            '3. aether.cmd calistir' \
-            'TUN icin Yonetici. Yoksa tarayici proxy 127.0.0.1:1080' \
-            > pack/windows/README.txt
-          (cd pack/windows && zip -r ../../dist/aether-windows-amd64.zip .)
+          mkdir -p build
+          python3 packaging/make_icon.py build/icon.png
 
-      - name: Linux tarball
-        run: |
-          set -euo pipefail
-          mkdir -p pack/linux/bin
-          cp work/linux/aether-core pack/linux/bin/aether-core
-          cp scripts/aether pack/linux/bin/aether
-          chmod +x pack/linux/bin/aether pack/linux/bin/aether-core
-          cp config.example.json pack/linux/
-          printf '%s\n' \
-            'Aether Client (Linux static — Pardus 19 / Debian 10+)' \
-            'mkdir -p ~/.config/aether' \
-            'panel sing-box.json -> ~/.config/aether/config.json' \
-            './bin/aether' \
-            > pack/linux/README.txt
-          tar -C pack/linux -czf dist/aether-linux-amd64.tar.gz .
+      - name: npm install
+        run: npm install
 
-      - name: Debian package
+      - name: electron-builder
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
         run: |
-          set -euo pipefail
-          VER="1.0.${{ github.run_number }}"
-          mkdir -p pkg/usr/lib/aether/bin pkg/usr/bin pkg/DEBIAN
-          cp work/linux/aether-core pkg/usr/lib/aether/bin/aether-core
-          cp packaging/linux/aether-wrapper pkg/usr/bin/aether
-          chmod 755 pkg/usr/lib/aether/bin/aether-core pkg/usr/bin/aether
-          sed "s/^Version:.*/Version: ${VER}/" packaging/deb/control > pkg/DEBIAN/control
-          dpkg-deb --build pkg "dist/aether_${VER}_amd64.deb"
-
-      - name: AppImage
-        run: |
-          set -euo pipefail
-          mkdir -p AppDir/usr/bin
-          cp work/linux/aether-core AppDir/usr/bin/aether-core
-          cp packaging/appimage/AppRun AppDir/AppRun
-          cp packaging/appimage/aether.desktop AppDir/aether.desktop
-          chmod +x AppDir/AppRun AppDir/usr/bin/aether-core
-          python3 packaging/appimage/make_icon.py AppDir/aether.png
-          cp AppDir/aether.png AppDir/.DirIcon
-          curl -fsSL -o appimagetool "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage"
-          chmod +x appimagetool
-          ARCH=x86_64 ./appimagetool --appimage-extract-and-run AppDir dist/Aether-x86_64.AppImage
+          npx electron-builder --linux AppImage deb tar.gz --win zip --publish never \
+            --config.extraMetadata.version=1.1.${{ github.run_number }}
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.0.${{ github.run_number }}
-          name: Aether v1.0.${{ github.run_number }}
+          tag_name: v1.1.${{ github.run_number }}
+          name: Aether v1.1.${{ github.run_number }}
           generate_release_notes: true
           make_latest: true
           files: |
-            dist/aether-windows-amd64.zip
-            dist/aether-linux-amd64.tar.gz
-            dist/aether_1.0.${{ github.run_number }}_amd64.deb
-            dist/Aether-x86_64.AppImage
+            dist/aether-*.zip
+            dist/aether-*.AppImage
+            dist/aether-*.deb
+            dist/aether-*.tar.gz

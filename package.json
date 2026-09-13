@@ -1,0 +1,22 @@
+{
+  "name": "aether",
+  "version": "1.1.0",
+  "description": "Aether — Cloudflare kenarlı masaüstü istemci",
+  "main": "src/main.js",
+  "author": "Aether",
+  "license": "MIT",
+  "homepage": "https://github.com/MuhammeDTayyiP0/aether-client",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/MuhammeDTayyiP0/aether-client.git"
+  },
+  "scripts": {
+    "start": "electron .",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder"
+  },
+  "devDependencies": {
+    "electron": "22.3.27",
+    "electron-builder": "24.13.3"
+  }
+}

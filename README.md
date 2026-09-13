@@ -1,23 +1,37 @@
 # Aether Client
 
-`main`'e her push **otomatik Release** basar:
+Electron masaüstü uygulaması. Bağlan / Kes, düğüm ekle (`vless://` veya sing-box JSON), çekirdek olarak sing-box.
 
-| Dosya | Kullan |
-| --- | --- |
-| `aether-windows-amd64.zip` | Windows |
-| `aether-linux-amd64.tar.gz` | Eski Pardus / Debian 10+ (tercih) |
-| `aether_1.0.N_amd64.deb` | Debian / Ubuntu / Pardus |
-| `Aether-x86_64.AppImage` | AppImage (FUSE yoksa `--appimage-extract-and-run`) |
+`main`'e push → GitHub **Release**:
+
+- Windows `.zip`
+- Linux `.AppImage`
+- Linux `.deb`
+- Linux `.tar.gz` (eski Pardus)
 
 Sunucu: [aether-server](https://github.com/MuhammeDTayyiP0/aether-server)
 
-## Nasıl
+## Kullanım
 
-1. Bu repoya push (veya Actions → Release → Run workflow)
-2. [Releases](https://github.com/MuhammeDTayyiP0/aether-client/releases) sayfasından indir
-3. Aether panel → Atölye → `sing-box.json` kaydet:
-   - Linux: `~/.config/aether/config.json`
-   - Windows: `%APPDATA%\Aether\config.json`
-4. Çalıştır: `aether.cmd` / `./bin/aether` / `aether`
+1. [Releases](https://github.com/MuhammeDTayyiP0/aether-client/releases) içinden paketini indir
+2. Aç → `vless://` veya Aether panel Atölye JSON yapıştır → **Ekle**
+3. **Bağlan**
+4. Proxy: `127.0.0.1:1080` (tarayıcı SOCKS/HTTP)
 
-`config.json` git'e **girmez**.
+Eski Pardus’ta AppImage FUSE istemezse:
+
+```bash
+./aether-*-linux-amd64.AppImage --appimage-extract-and-run
+```
+
+veya `.tar.gz` / `.deb`.
+
+## Geliştirme
+
+```bash
+# linux çekirdek
+mkdir -p resources/bin/linux
+# sing-box ikilisini aether-core adıyla koy
+npm install
+npx electron .
+```

@@ -13,15 +13,13 @@ const path = require("path");
 const fs = require("fs");
 const https = require("https");
 const http = require("http");
-const tls = require("tls");
 const { spawn, execFileSync } = require("child_process");
 
 try {
   app.commandLine.appendSwitch("ignore-certificate-errors");
-  app.commandLine.appendSwitch("ignore-certificate-errors-spki-list");
   app.commandLine.appendSwitch("allow-insecure-localhost");
 } catch {
-  /* too early / tests */
+  /* ignore */
 }
 
 try {
@@ -33,15 +31,7 @@ try {
 const insecureAgent = new https.Agent({
   rejectUnauthorized: false,
   keepAlive: false,
-  minVersion: "TLSv1",
 });
-
-const origConnect = tls.connect;
-tls.connect = function patchedTlsConnect(...args) {
-  if (args[0] && typeof args[0] === "object") args[0].rejectUnauthorized = false;
-  if (args[1] && typeof args[1] === "object") args[1].rejectUnauthorized = false;
-  return origConnect.apply(this, args);
-};
 
 const VLIST_URLS = [
   "https://vlist.geldesat.com/list.json",
@@ -114,15 +104,13 @@ function friendlyErr(e) {
   const raw = String((e && e.message) || e || "");
   const s = raw.toLowerCase();
   if (
-    s.includes("self-signed") ||
-    s.includes("self signed") ||
-    s.includes("certificate") ||
-    s.includes("certifika") ||
-    s.includes("unable to verify") ||
-    s.includes("unknown authority") ||
-    s.includes("cert_authority")
+    s.indexOf("self-signed") !== -1 ||
+    s.indexOf("self signed") !== -1 ||
+    s.indexOf("certificate") !== -1 ||
+    s.indexOf("certifika") !== -1 ||
+    s.indexOf("unknown authority") !== -1
   ) {
-    return "okul sertifikas\u0131 atland\u0131 \u2014 yeni s\u00fcr\u00fcm\u00fc kullan, Yenile\u2019ye bas";
+    return "sertifika atlandi — v1.1.17+ kullan, Yenile ye bas";
   }
   return raw;
 }
@@ -135,20 +123,34 @@ function killPid(pid) {
     } else {
       try {
         process.kill(pid, "SIGTERM");
-      } catch {}
+      } catch {
+        /* gone */
+      }
       setTimeout(() => {
-        try { process.kill(pid, "SIGKILL"); } catch {}
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          /* gone */
+        }
       }, 800);
     }
-  } catch {}
+  } catch {
+    /* ignore */
+  }
 }
 
 function killStale() {
   try {
     const pid = parseInt(fs.readFileSync(pidPath(), "utf8"), 10);
     if (pid && pid !== process.pid) killPid(pid);
-  } catch {}
-  try { fs.unlinkSync(pidPath()); } catch {}
+  } catch {
+    /* no pid file */
+  }
+  try {
+    fs.unlinkSync(pidPath());
+  } catch {
+    /* ignore */
+  }
 }
 
 function stopCore() {
@@ -157,7 +159,11 @@ function stopCore() {
   activeId = null;
   lastExitIp = "";
   if (proc && proc.pid) killPid(proc.pid);
-  try { fs.unlinkSync(pidPath()); } catch {}
+  try {
+    fs.unlinkSync(pidPath());
+  } catch {
+    /* ignore */
+  }
   clearSystemProxy();
   send("status", statusPayload());
 }
@@ -176,10 +182,18 @@ function winReg(args) {
 
 function refreshWinInet() {
   try {
-    execFileSync("powershell.exe", ["-NoProfile", "-Command",
-      "Add-Type -TypeDefinition 'using System.Runtime.InteropServices;public class A{[DllImport(\"wininet.dll\")]public static extern bool InternetSetOption(int h,int o,int l,int s);};' ; [A]::InternetSetOption(0,39,0,0)|Out-Null; [A]::InternetSetOption(0,37,0,0)|Out-Null"],
-      { windowsHide: true, timeout: 5000 });
-  } catch {}
+    execFileSync(
+      "powershell.exe",
+      [
+        "-NoProfile",
+        "-Command",
+        "Add-Type -TypeDefinition 'using System.Runtime.InteropServices;public class A{[DllImport(\"wininet.dll\")]public static extern bool InternetSetOption(int h,int o,int l,int s);};' ; [A]::InternetSetOption(0,39,0,0)|Out-Null; [A]::InternetSetOption(0,37,0,0)|Out-Null",
+      ],
+      { windowsHide: true, timeout: 5000 }
+    );
+  } catch {
+    /* ignore */
+  }
 }
 
 function applySystemProxy() {
@@ -188,12 +202,16 @@ function applySystemProxy() {
     const key = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings";
     const prev = { enable: "0", server: "" };
     const qe = winReg(["query", key, "/v", "ProxyEnable"]);
-    const m = qe.match(/ProxyEnable\\s+REG_DWORD\\s+0x([0-9a-f]+)/i);
+    const m = qe.match(/ProxyEnable\s+REG_DWORD\s+0x([0-9a-f]+)/i);
     if (m) prev.enable = String(parseInt(m[1], 16));
     const qs = winReg(["query", key, "/v", "ProxyServer"]);
-    const s = qs.match(/ProxyServer\\s+REG_SZ\\s+(.+)/i);
+    const s = qs.match(/ProxyServer\s+REG_SZ\s+(.+)/i);
     if (s) prev.server = s[1].trim();
-    try { fs.writeFileSync(proxyPrevPath(), JSON.stringify(prev)); } catch {}
+    try {
+      fs.writeFileSync(proxyPrevPath(), JSON.stringify(prev));
+    } catch {
+      /* ignore */
+    }
     winReg(["add", key, "/v", "ProxyEnable", "/t", "REG_DWORD", "/d", "1", "/f"]);
     winReg(["add", key, "/v", "ProxyServer", "/t", "REG_SZ", "/d", "127.0.0.1:1080", "/f"]);
     refreshWinInet();
@@ -209,43 +227,83 @@ function applySystemProxy() {
     execFileSync("gsettings", ["set", "org.gnome.system.proxy.socks", "host", "127.0.0.1"], { timeout: 2000 });
     execFileSync("gsettings", ["set", "org.gnome.system.proxy.socks", "port", "1080"], { timeout: 2000 });
     proxyArmed = true;
-  } catch {}
+  } catch {
+    /* XFCE / no gsettings */
+  }
 }
 
 function clearSystemProxy() {
   if (process.platform === "win32") {
     const key = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings";
     let prev = { enable: "0", server: "" };
-    try { prev = JSON.parse(fs.readFileSync(proxyPrevPath(), "utf8")); } catch {}
+    try {
+      prev = JSON.parse(fs.readFileSync(proxyPrevPath(), "utf8"));
+    } catch {
+      /* none */
+    }
     winReg(["add", key, "/v", "ProxyEnable", "/t", "REG_DWORD", "/d", prev.enable || "0", "/f"]);
-    if (prev.server) winReg(["add", key, "/v", "ProxyServer", "/t", "REG_SZ", "/d", prev.server, "/f"]);
-    else winReg(["delete", key, "/v", "ProxyServer", "/f"]);
-    try { fs.unlinkSync(proxyPrevPath()); } catch {}
+    if (prev.server) {
+      winReg(["add", key, "/v", "ProxyServer", "/t", "REG_SZ", "/d", prev.server, "/f"]);
+    } else {
+      winReg(["delete", key, "/v", "ProxyServer", "/f"]);
+    }
+    try {
+      fs.unlinkSync(proxyPrevPath());
+    } catch {
+      /* ignore */
+    }
     refreshWinInet();
     proxyArmed = false;
     return;
   }
   if (!proxyArmed) return;
-  try { execFileSync("gsettings", ["set", "org.gnome.system.proxy", "mode", "none"], { timeout: 2000 }); } catch {}
+  try {
+    execFileSync("gsettings", ["set", "org.gnome.system.proxy", "mode", "none"], { timeout: 2000 });
+  } catch {
+    /* ignore */
+  }
   proxyArmed = false;
+}
+
+function isIpv4(s) {
+  const p = String(s || "").trim().split(/\s+/)[0];
+  const a = p.split(".");
+  if (a.length !== 4) return "";
+  for (let i = 0; i < 4; i++) {
+    const n = Number(a[i]);
+    if (!Number.isInteger(n) || n < 0 || n > 255) return "";
+  }
+  return p;
 }
 
 function probeOne(hostPath) {
   return new Promise((resolve, reject) => {
-    const req = http.request({
-      host: "127.0.0.1", port: 1080, path: hostPath, method: "GET",
-      headers: { Connection: "close", "User-Agent": "Aether" }, timeout: 7000,
-    }, (res) => {
-      let d = "";
-      res.on("data", (c) => { d += c; });
-      res.on("end", () => {
-        const ip = d.trim().split(/\\s+/)[0];
-        if (/^\\d{1,3}(?:\\.\\d{1,3}){3}$/.test(ip)) resolve(ip);
-        else reject(new Error("ip alinamadi"));
-      });
-    });
+    const req = http.request(
+      {
+        host: "127.0.0.1",
+        port: 1080,
+        path: hostPath,
+        method: "GET",
+        headers: { Connection: "close", "User-Agent": "Aether" },
+        timeout: 7000,
+      },
+      (res) => {
+        let d = "";
+        res.on("data", (c) => {
+          d += c;
+        });
+        res.on("end", () => {
+          const ip = isIpv4(d);
+          if (ip) resolve(ip);
+          else reject(new Error("ip alinamadi"));
+        });
+      }
+    );
     req.on("error", reject);
-    req.on("timeout", () => { req.destroy(); reject(new Error("tunel zaman asimi")); });
+    req.on("timeout", () => {
+      req.destroy();
+      reject(new Error("tunel zaman asimi"));
+    });
     req.end();
   });
 }
@@ -259,16 +317,26 @@ async function waitForTunnel() {
   for (let i = 0; i < 16; i++) {
     await new Promise((r) => setTimeout(r, 400 + i * 160));
     if (!child) throw new Error("cekirdek durdu");
-    try { return await probeViaProxy(); } catch (e) { last = e; }
+    try {
+      return await probeViaProxy();
+    } catch (e) {
+      last = e;
+    }
   }
   throw last;
 }
 
-function fetchText(url, timeoutMs = 12000, hops = 0) {
+function fetchText(url, timeoutMs, hops) {
+  if (!timeoutMs) timeoutMs = 12000;
+  if (!hops) hops = 0;
   return new Promise((resolve, reject) => {
     if (hops > 5) return reject(new Error("redirect"));
     let u;
-    try { u = new URL(url); } catch (e) { return reject(e); }
+    try {
+      u = new URL(url);
+    } catch (e) {
+      return reject(e);
+    }
     const isHttps = u.protocol === "https:";
     const opts = {
       protocol: u.protocol,
@@ -285,7 +353,6 @@ function fetchText(url, timeoutMs = 12000, hops = 0) {
       },
       timeout: timeoutMs,
       rejectUnauthorized: false,
-      checkServerIdentity: () => undefined,
     };
     if (isHttps) opts.agent = insecureAgent;
     const lib = isHttps ? https : http;
@@ -293,23 +360,38 @@ function fetchText(url, timeoutMs = 12000, hops = 0) {
       const loc = res.headers.location;
       if (res.statusCode >= 300 && res.statusCode < 400 && loc) {
         res.resume();
-        const next = loc.startsWith("http") ? loc : new URL(loc, url).href;
+        const next = loc.indexOf("http") === 0 ? loc : new URL(loc, url).href;
         return fetchText(next, timeoutMs, hops + 1).then(resolve, reject);
       }
-      if (res.statusCode !== 200) { res.resume(); return reject(new Error("HTTP " + res.statusCode)); }
+      if (res.statusCode !== 200) {
+        res.resume();
+        return reject(new Error("HTTP " + res.statusCode));
+      }
       let d = "";
       res.setEncoding("utf8");
-      res.on("data", (c) => { d += c; if (d.length > 2e6) { req.destroy(); reject(new Error("liste cok buyuk")); } });
+      res.on("data", (c) => {
+        d += c;
+        if (d.length > 2000000) {
+          req.destroy();
+          reject(new Error("liste cok buyuk"));
+        }
+      });
       res.on("end", () => resolve(d));
     });
     req.on("error", reject);
-    req.on("timeout", () => { req.destroy(); reject(new Error("zaman asimi")); });
+    req.on("timeout", () => {
+      req.destroy();
+      reject(new Error("zaman asimi"));
+    });
     req.end();
   });
 }
 
 function stripAnsi(s) {
-  return String(s || "").replace(/\\x1B\\[[0-9;]*[A-Za-z]/g, "").replace(/\\[(3[0-9]|0|1)m/g, "").replace(/\\s+/g, " ").trim();
+  return String(s || "")
+    .replace(/\u001b\[[0-9;]*[A-Za-z]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function hardenTls(tlsObj, sni) {
@@ -401,14 +483,32 @@ function domainFromConfig(cfg) {
 function itemToProfile(item, i) {
   if (typeof item === "string") {
     const parsed = singboxFromVless(item);
-    return { id: "remote-" + i + "-" + parsed.domain, name: parsed.name, domain: parsed.domain, config: parsed.config, source: "remote" };
+    return {
+      id: "remote-" + i + "-" + parsed.domain,
+      name: parsed.name,
+      domain: parsed.domain,
+      config: parsed.config,
+      source: "remote",
+    };
   }
   if (item && item.vless) {
     const parsed = singboxFromVless(item.vless);
-    return { id: "remote-" + i + "-" + parsed.domain, name: item.name || parsed.name, domain: parsed.domain, config: parsed.config, source: "remote" };
+    return {
+      id: "remote-" + i + "-" + parsed.domain,
+      name: item.name || parsed.name,
+      domain: parsed.domain,
+      config: parsed.config,
+      source: "remote",
+    };
   }
   if (item && item.config && item.config.outbounds) {
-    return { id: "remote-" + i + "-" + domainFromConfig(item.config), name: item.name || domainFromConfig(item.config), domain: domainFromConfig(item.config), config: item.config, source: "remote" };
+    return {
+      id: "remote-" + i + "-" + domainFromConfig(item.config),
+      name: item.name || domainFromConfig(item.config),
+      domain: domainFromConfig(item.config),
+      config: item.config,
+      source: "remote",
+    };
   }
   throw new Error("dugum okunamadi");
 }
@@ -416,8 +516,11 @@ function itemToProfile(item, i) {
 function parseVlist(text) {
   const t = String(text || "").trim();
   if (!t) throw new Error("liste bos");
-  if (t.startsWith("vless://")) {
-    return t.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.startsWith("vless://") && !l.startsWith("#"));
+  if (t.indexOf("vless://") === 0) {
+    return t
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter((l) => l.indexOf("vless://") === 0 && l.indexOf("#") !== 0);
   }
   const j = JSON.parse(t);
   if (Array.isArray(j)) return j;
@@ -443,13 +546,19 @@ function applyFallback() {
 
 async function pullVlist() {
   let lastErr = null;
-  for (const url of VLIST_URLS) {
+  for (let i = 0; i < VLIST_URLS.length; i++) {
     try {
-      const text = await fetchText(url);
+      const text = await fetchText(VLIST_URLS[i]);
       return applyRemote(parseVlist(text));
-    } catch (e) { lastErr = e; }
+    } catch (e) {
+      lastErr = e;
+    }
   }
-  try { return applyFallback(); } catch { throw lastErr || new Error("liste alinamadi"); }
+  try {
+    return applyFallback();
+  } catch {
+    throw lastErr || new Error("liste alinamadi");
+  }
 }
 
 function addFromText(raw) {
@@ -457,13 +566,25 @@ function addFromText(raw) {
   if (!text) throw new Error("Bos");
   const store = loadStore();
   let profile;
-  if (text.startsWith("vless://")) {
+  if (text.indexOf("vless://") === 0) {
     const parsed = singboxFromVless(text);
-    profile = { id: "local-" + Date.now(), name: parsed.name, domain: parsed.domain, config: parsed.config, source: "local" };
+    profile = {
+      id: "local-" + Date.now(),
+      name: parsed.name,
+      domain: parsed.domain,
+      config: parsed.config,
+      source: "local",
+    };
   } else {
     const cfg = JSON.parse(text);
     if (!cfg.outbounds) throw new Error("sing-box JSON degil");
-    profile = { id: "local-" + Date.now(), name: domainFromConfig(cfg), domain: domainFromConfig(cfg), config: cfg, source: "local" };
+    profile = {
+      id: "local-" + Date.now(),
+      name: domainFromConfig(cfg),
+      domain: domainFromConfig(cfg),
+      config: cfg,
+      source: "local",
+    };
   }
   store.profiles.push(profile);
   saveStore(store);
@@ -476,25 +597,37 @@ async function startCore(id) {
   const profile = store.profiles.find((p) => p.id === id);
   if (!profile) throw new Error("Dugum yok");
   const bin = corePath();
-  if (!fs.existsSync(bin)) throw new Error("Cekirdek yok \u2014 GitHub Release paketini kullan");
+  if (!fs.existsSync(bin)) throw new Error("Cekirdek yok — GitHub Release paketini kullan");
   const cfgPath = path.join(app.getPath("userData"), "active.json");
   const cfg = migrateConfig(profile.config);
   fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2));
   const proc = spawn(bin, ["run", "-c", cfgPath], {
-    stdio: ["ignore", "pipe", "pipe"], windowsHide: true, detached: false,
-    env: Object.assign({}, process.env, { NODE_TLS_REJECT_UNAUTHORIZED: "0" }),
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: true,
+    detached: false,
   });
   child = proc;
   activeId = id;
-  try { fs.writeFileSync(pidPath(), String(proc.pid)); } catch {}
+  try {
+    fs.writeFileSync(pidPath(), String(proc.pid));
+  } catch {
+    /* ignore */
+  }
   let errBuf = "";
-  proc.stderr.on("data", (d) => { errBuf += d.toString(); if (errBuf.length > 4000) errBuf = errBuf.slice(-2000); });
+  proc.stderr.on("data", (d) => {
+    errBuf += d.toString();
+    if (errBuf.length > 4000) errBuf = errBuf.slice(-2000);
+  });
   proc.on("exit", (code) => {
     if (child === proc) {
       child = null;
       activeId = null;
       lastExitIp = "";
-      try { fs.unlinkSync(pidPath()); } catch {}
+      try {
+        fs.unlinkSync(pidPath());
+      } catch {
+        /* ignore */
+      }
       clearSystemProxy();
       send("status", statusPayload({ lastError: code ? friendlyErr(stripAnsi(errBuf) || "cikis " + code) : "" }));
     }
@@ -514,10 +647,20 @@ async function startCore(id) {
 function createWindow() {
   const ico = iconFile();
   const opts = {
-    width: 420, height: 700, minWidth: 400, minHeight: 640,
-    backgroundColor: "#0c0c0e", autoHideMenuBar: true, title: "Aether", show: false,
+    width: 420,
+    height: 700,
+    minWidth: 400,
+    minHeight: 640,
+    backgroundColor: "#0c0c0e",
+    autoHideMenuBar: true,
+    title: "Aether",
+    show: false,
     icon: fs.existsSync(ico) ? ico : undefined,
-    webPreferences: { preload: path.join(__dirname, "preload.js"), contextIsolation: true, nodeIntegration: false },
+    webPreferences: {
+      preload: path.join(__dirname, "preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
   };
   if (process.platform === "win32") {
     opts.titleBarStyle = "hidden";
@@ -528,7 +671,9 @@ function createWindow() {
   win = new BrowserWindow(opts);
   win.loadFile(path.join(__dirname, "renderer", "index.html"));
   win.once("ready-to-show", () => win.show());
-  win.on("close", () => { stopCore(); });
+  win.on("close", () => {
+    stopCore();
+  });
 }
 
 function createTray() {
@@ -536,17 +681,44 @@ function createTray() {
   let img = fs.existsSync(ico) ? nativeImage.createFromPath(ico) : nativeImage.createEmpty();
   if (!img.isEmpty()) img = img.resize({ width: 16, height: 16 });
   tray = new Tray(img);
-  const menu = () => Menu.buildFromTemplate([
-    { label: child ? "Bagli" : "Kesik", enabled: false },
-    { label: "Goster", click: () => { if (win) { win.show(); win.focus(); } } },
-    { label: "Kes", click: () => stopCore() },
-    { type: "separator" },
-    { label: "Cik", click: () => { quitting = true; stopCore(); app.quit(); } },
-  ]);
+  const menu = () =>
+    Menu.buildFromTemplate([
+      { label: child ? "Bagli" : "Kesik", enabled: false },
+      {
+        label: "Goster",
+        click: () => {
+          if (win) {
+            win.show();
+            win.focus();
+          }
+        },
+      },
+      { label: "Kes", click: () => stopCore() },
+      { type: "separator" },
+      {
+        label: "Cik",
+        click: () => {
+          quitting = true;
+          stopCore();
+          app.quit();
+        },
+      },
+    ]);
   tray.setToolTip("Aether");
   tray.setContextMenu(menu());
-  tray.on("click", () => { if (win) { win.show(); win.focus(); } });
-  setInterval(() => { try { tray.setContextMenu(menu()); } catch {} }, 2500);
+  tray.on("click", () => {
+    if (win) {
+      win.show();
+      win.focus();
+    }
+  });
+  setInterval(() => {
+    try {
+      tray.setContextMenu(menu());
+    } catch {
+      /* ignore */
+    }
+  }, 2500);
 }
 
 function shutdownAll() {
@@ -575,33 +747,50 @@ if (!gotLock) {
 
 app.whenReady().then(() => {
   killStale();
-  try { if (fs.existsSync(proxyPrevPath())) clearSystemProxy(); } catch {}
+  try {
+    if (fs.existsSync(proxyPrevPath())) clearSystemProxy();
+  } catch {
+    /* ignore */
+  }
   createWindow();
   createTray();
-  const store = loadStore();
-  if (!store.profiles || !store.profiles.length) {
-    try { applyFallback(); } catch {}
-  }
   pullVlist()
     .then((r) => send("vlist", r))
-    .catch((e) => {
-      try { send("vlist", applyFallback()); }
-      catch { send("vlist-error", { message: friendlyErr(e) }); }
-    });
+    .catch((e) => send("vlist-error", { message: friendlyErr(e) }));
 });
 
-app.on("window-all-closed", () => { stopCore(); app.quit(); });
+app.on("window-all-closed", () => {
+  stopCore();
+  app.quit();
+});
 app.on("before-quit", shutdownAll);
 app.on("will-quit", shutdownAll);
 app.on("quit", shutdownAll);
-try { powerMonitor.on("shutdown", shutdownAll); } catch {}
-process.on("SIGINT", () => { shutdownAll(); app.quit(); });
-process.on("SIGTERM", () => { shutdownAll(); app.quit(); });
-process.on("exit", () => { if (child && child.pid) killPid(child.pid); });
+try {
+  powerMonitor.on("shutdown", shutdownAll);
+} catch {
+  /* ignore */
+}
+process.on("SIGINT", () => {
+  shutdownAll();
+  app.quit();
+});
+process.on("SIGTERM", () => {
+  shutdownAll();
+  app.quit();
+});
+process.on("exit", () => {
+  if (child && child.pid) killPid(child.pid);
+});
 
 ipcMain.handle("state", () => {
   const store = loadStore();
-  return { ...statusPayload(), profiles: store.profiles, locale: store.locale || "tr", remoteAt: store.remoteAt || null };
+  return {
+    ...statusPayload(),
+    profiles: store.profiles,
+    locale: store.locale || "tr",
+    remoteAt: store.remoteAt || null,
+  };
 });
 ipcMain.handle("set-locale", (_e, locale) => {
   const store = loadStore();
@@ -618,5 +807,8 @@ ipcMain.handle("remove-profile", (_e, id) => {
   return store.profiles;
 });
 ipcMain.handle("connect", (_e, id) => startCore(id));
-ipcMain.handle("disconnect", () => { stopCore(); return statusPayload(); });
+ipcMain.handle("disconnect", () => {
+  stopCore();
+  return statusPayload();
+});
 ipcMain.handle("refresh-vlist", async () => pullVlist());

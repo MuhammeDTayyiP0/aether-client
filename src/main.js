@@ -1,3 +1,5 @@
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+
 const {
   app,
   BrowserWindow,
@@ -11,13 +13,45 @@ const path = require("path");
 const fs = require("fs");
 const https = require("https");
 const http = require("http");
+const tls = require("tls");
 const { spawn, execFileSync } = require("child_process");
+
+try {
+  app.commandLine.appendSwitch("ignore-certificate-errors");
+  app.commandLine.appendSwitch("ignore-certificate-errors-spki-list");
+  app.commandLine.appendSwitch("allow-insecure-localhost");
+} catch {
+  /* too early / tests */
+}
+
+try {
+  https.globalAgent.options.rejectUnauthorized = false;
+} catch {
+  /* ignore */
+}
+
+const insecureAgent = new https.Agent({
+  rejectUnauthorized: false,
+  keepAlive: false,
+  minVersion: "TLSv1",
+});
+
+const origConnect = tls.connect;
+tls.connect = function patchedTlsConnect(...args) {
+  if (args[0] && typeof args[0] === "object") args[0].rejectUnauthorized = false;
+  if (args[1] && typeof args[1] === "object") args[1].rejectUnauthorized = false;
+  return origConnect.apply(this, args);
+};
 
 const VLIST_URLS = [
   "https://vlist.geldesat.com/list.json",
+  "http://vlist.geldesat.com/list.json",
   "https://vlist.geldesat.com/list.txt",
   "https://vlist.geldesat.com/",
 ];
+
+const FALLBACK_VLESS =
+  "vless://a34d5014-2895-46ce-96c3-5b872a4a79fe@vpn.geldesat.com:443?encryption=none&security=tls&sni=vpn.geldesat.com&type=ws&host=vpn.geldesat.com&path=%2Frasgelekrktr#Aether";
 
 let win = null;
 let tray = null;
@@ -74,6 +108,23 @@ function statusPayload(extra = {}) {
     exitIp: lastExitIp || "",
     ...extra,
   };
+}
+
+function friendlyErr(e) {
+  const raw = String((e && e.message) || e || "");
+  const s = raw.toLowerCase();
+  if (
+    s.includes("self-signed") ||
+    s.includes("self signed") ||
+    s.includes("certificate") ||
+    s.includes("certifika") ||
+    s.includes("unable to verify") ||
+    s.includes("unknown authority") ||
+    s.includes("cert_authority")
+  ) {
+    return "okul sertifikas\u0131 atland\u0131 \u2014 yeni s\u00fcr\u00fcm\u00fc kullan, Yenile\u2019ye bas";
+  }
+  return raw;
 }
 
 function killPid(pid) {
@@ -137,10 +188,10 @@ function applySystemProxy() {
     const key = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings";
     const prev = { enable: "0", server: "" };
     const qe = winReg(["query", key, "/v", "ProxyEnable"]);
-    const m = qe.match(/ProxyEnable\s+REG_DWORD\s+0x([0-9a-f]+)/i);
+    const m = qe.match(/ProxyEnable\\s+REG_DWORD\\s+0x([0-9a-f]+)/i);
     if (m) prev.enable = String(parseInt(m[1], 16));
     const qs = winReg(["query", key, "/v", "ProxyServer"]);
-    const s = qs.match(/ProxyServer\s+REG_SZ\s+(.+)/i);
+    const s = qs.match(/ProxyServer\\s+REG_SZ\\s+(.+)/i);
     if (s) prev.server = s[1].trim();
     try { fs.writeFileSync(proxyPrevPath(), JSON.stringify(prev)); } catch {}
     winReg(["add", key, "/v", "ProxyEnable", "/t", "REG_DWORD", "/d", "1", "/f"]);
@@ -179,17 +230,17 @@ function clearSystemProxy() {
   proxyArmed = false;
 }
 
-function probeViaProxy() {
+function probeOne(hostPath) {
   return new Promise((resolve, reject) => {
     const req = http.request({
-      host: "127.0.0.1", port: 1080, path: "http://api.ipify.org/", method: "GET",
-      headers: { Host: "api.ipify.org", Connection: "close", "User-Agent": "Aether" }, timeout: 6000,
+      host: "127.0.0.1", port: 1080, path: hostPath, method: "GET",
+      headers: { Connection: "close", "User-Agent": "Aether" }, timeout: 7000,
     }, (res) => {
       let d = "";
       res.on("data", (c) => { d += c; });
       res.on("end", () => {
-        const ip = d.trim();
-        if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(ip)) resolve(ip);
+        const ip = d.trim().split(/\\s+/)[0];
+        if (/^\\d{1,3}(?:\\.\\d{1,3}){3}$/.test(ip)) resolve(ip);
         else reject(new Error("ip alinamadi"));
       });
     });
@@ -199,25 +250,46 @@ function probeViaProxy() {
   });
 }
 
+function probeViaProxy() {
+  return probeOne("http://api.ipify.org/").catch(() => probeOne("http://ipv4.icanhazip.com/"));
+}
+
 async function waitForTunnel() {
   let last = new Error("tunel yok");
-  for (let i = 0; i < 10; i++) {
-    await new Promise((r) => setTimeout(r, 350 + i * 150));
+  for (let i = 0; i < 16; i++) {
+    await new Promise((r) => setTimeout(r, 400 + i * 160));
     if (!child) throw new Error("cekirdek durdu");
     try { return await probeViaProxy(); } catch (e) { last = e; }
   }
   throw last;
 }
 
-function fetchText(url, timeoutMs = 9000, hops = 0) {
+function fetchText(url, timeoutMs = 12000, hops = 0) {
   return new Promise((resolve, reject) => {
     if (hops > 5) return reject(new Error("redirect"));
-    const lib = url.startsWith("http://") ? http : https;
-    const req = lib.get(url, {
-      headers: { "User-Agent": "AetherClient/1.1", Accept: "application/json, text/plain, */*" },
+    let u;
+    try { u = new URL(url); } catch (e) { return reject(e); }
+    const isHttps = u.protocol === "https:";
+    const opts = {
+      protocol: u.protocol,
+      hostname: u.hostname,
+      servername: u.hostname,
+      port: Number(u.port) || (isHttps ? 443 : 80),
+      path: (u.pathname || "/") + u.search,
+      method: "GET",
+      headers: {
+        "User-Agent": "AetherClient/1.2",
+        Accept: "application/json, text/plain, */*",
+        Host: u.host,
+        Connection: "close",
+      },
       timeout: timeoutMs,
       rejectUnauthorized: false,
-    }, (res) => {
+      checkServerIdentity: () => undefined,
+    };
+    if (isHttps) opts.agent = insecureAgent;
+    const lib = isHttps ? https : http;
+    const req = lib.request(opts, (res) => {
       const loc = res.headers.location;
       if (res.statusCode >= 300 && res.statusCode < 400 && loc) {
         res.resume();
@@ -232,11 +304,24 @@ function fetchText(url, timeoutMs = 9000, hops = 0) {
     });
     req.on("error", reject);
     req.on("timeout", () => { req.destroy(); reject(new Error("zaman asimi")); });
+    req.end();
   });
 }
 
 function stripAnsi(s) {
-  return String(s || "").replace(/\x1B\[[0-9;]*[A-Za-z]/g, "").replace(/\[(3[0-9]|0|1)m/g, "").replace(/\s+/g, " ").trim();
+  return String(s || "").replace(/\\x1B\\[[0-9;]*[A-Za-z]/g, "").replace(/\\[(3[0-9]|0|1)m/g, "").replace(/\\s+/g, " ").trim();
+}
+
+function hardenTls(tlsObj, sni) {
+  const next = Object.assign({}, tlsObj || { enabled: true });
+  next.enabled = true;
+  next.insecure = true;
+  next.disable_sni = false;
+  if (sni) next.server_name = sni;
+  else if (!next.server_name) next.server_name = "vpn.geldesat.com";
+  next.alpn = ["http/1.1"];
+  delete next.utls;
+  return next;
 }
 
 function migrateConfig(cfg) {
@@ -257,7 +342,7 @@ function migrateConfig(cfg) {
       if (o.type === "block" || o.type === "dns") return o;
       const patched = Object.assign({}, o, { domain_resolver: "local" });
       if (patched.type === "vless" || patched.tls) {
-        patched.tls = Object.assign({}, patched.tls || { enabled: true }, { insecure: true });
+        patched.tls = hardenTls(patched.tls, (patched.tls && patched.tls.server_name) || patched.server);
       }
       return patched;
     });
@@ -285,7 +370,6 @@ function singboxFromVless(link) {
   const name = decodeURIComponent(u.hash.replace(/^#/, "")) || host;
   const wsPath = decodeURIComponent(q.get("path") || "/");
   const sni = q.get("sni") || host;
-  const fp = q.get("fp") || "chrome";
   const wsHost = q.get("host") || host;
   return {
     name,
@@ -300,7 +384,7 @@ function singboxFromVless(link) {
           server_port: port,
           uuid,
           packet_encoding: "xudp",
-          tls: { enabled: true, insecure: true, server_name: sni, utls: { enabled: true, fingerprint: fp } },
+          tls: hardenTls({ enabled: true }, sni),
           transport: { type: "ws", path: wsPath, headers: { Host: wsHost } },
         },
         { type: "direct", tag: "direct" },
@@ -342,23 +426,30 @@ function parseVlist(text) {
   throw new Error("list.json bicimi hatali");
 }
 
+function applyRemote(items) {
+  const remote = items.map((it, i) => itemToProfile(it, i));
+  if (!remote.length) throw new Error("dugum yok");
+  const store = loadStore();
+  const local = (store.profiles || []).filter((p) => p.source === "local");
+  store.profiles = remote.concat(local);
+  store.remoteAt = new Date().toISOString();
+  saveStore(store);
+  return { profiles: store.profiles, remoteAt: store.remoteAt };
+}
+
+function applyFallback() {
+  return applyRemote([FALLBACK_VLESS]);
+}
+
 async function pullVlist() {
   let lastErr = null;
   for (const url of VLIST_URLS) {
     try {
       const text = await fetchText(url);
-      const items = parseVlist(text);
-      const remote = items.map((it, i) => itemToProfile(it, i));
-      if (!remote.length) throw new Error("dugum yok");
-      const store = loadStore();
-      const local = (store.profiles || []).filter((p) => p.source === "local");
-      store.profiles = remote.concat(local);
-      store.remoteAt = new Date().toISOString();
-      saveStore(store);
-      return { profiles: store.profiles, remoteAt: store.remoteAt };
+      return applyRemote(parseVlist(text));
     } catch (e) { lastErr = e; }
   }
-  throw lastErr || new Error("liste alinamadi");
+  try { return applyFallback(); } catch { throw lastErr || new Error("liste alinamadi"); }
 }
 
 function addFromText(raw) {
@@ -385,11 +476,14 @@ async function startCore(id) {
   const profile = store.profiles.find((p) => p.id === id);
   if (!profile) throw new Error("Dugum yok");
   const bin = corePath();
-  if (!fs.existsSync(bin)) throw new Error("Cekirdek yok — GitHub Release paketini kullan");
+  if (!fs.existsSync(bin)) throw new Error("Cekirdek yok \u2014 GitHub Release paketini kullan");
   const cfgPath = path.join(app.getPath("userData"), "active.json");
   const cfg = migrateConfig(profile.config);
   fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2));
-  const proc = spawn(bin, ["run", "-c", cfgPath], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true, detached: false });
+  const proc = spawn(bin, ["run", "-c", cfgPath], {
+    stdio: ["ignore", "pipe", "pipe"], windowsHide: true, detached: false,
+    env: Object.assign({}, process.env, { NODE_TLS_REJECT_UNAUTHORIZED: "0" }),
+  });
   child = proc;
   activeId = id;
   try { fs.writeFileSync(pidPath(), String(proc.pid)); } catch {}
@@ -402,7 +496,7 @@ async function startCore(id) {
       lastExitIp = "";
       try { fs.unlinkSync(pidPath()); } catch {}
       clearSystemProxy();
-      send("status", statusPayload({ lastError: code ? stripAnsi(errBuf) || "cikis " + code : "" }));
+      send("status", statusPayload({ lastError: code ? friendlyErr(stripAnsi(errBuf) || "cikis " + code) : "" }));
     }
   });
   try {
@@ -411,7 +505,7 @@ async function startCore(id) {
     send("status", statusPayload());
     return statusPayload();
   } catch (e) {
-    const msg = stripAnsi(errBuf) || e.message || "tunel kurulamadi";
+    const msg = friendlyErr(stripAnsi(errBuf) || e.message || "tunel kurulamadi");
     stopCore();
     throw new Error(msg);
   }
@@ -461,6 +555,11 @@ function shutdownAll() {
   stopCore();
 }
 
+app.on("certificate-error", (event, _wc, _url, _error, _cert, callback) => {
+  event.preventDefault();
+  callback(true);
+});
+
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
@@ -479,7 +578,16 @@ app.whenReady().then(() => {
   try { if (fs.existsSync(proxyPrevPath())) clearSystemProxy(); } catch {}
   createWindow();
   createTray();
-  pullVlist().then((r) => send("vlist", r)).catch((e) => send("vlist-error", { message: e.message || String(e) }));
+  const store = loadStore();
+  if (!store.profiles || !store.profiles.length) {
+    try { applyFallback(); } catch {}
+  }
+  pullVlist()
+    .then((r) => send("vlist", r))
+    .catch((e) => {
+      try { send("vlist", applyFallback()); }
+      catch { send("vlist-error", { message: friendlyErr(e) }); }
+    });
 });
 
 app.on("window-all-closed", () => { stopCore(); app.quit(); });

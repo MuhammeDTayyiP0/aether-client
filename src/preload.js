@@ -3,6 +3,7 @@ const { contextBridge, ipcRenderer } = require("electron");
 contextBridge.exposeInMainWorld("aether", {
   state: () => ipcRenderer.invoke("state"),
   setLocale: (locale) => ipcRenderer.invoke("set-locale", locale),
+  setTun: (on) => ipcRenderer.invoke("set-tun", on),
   addProfile: (text) => ipcRenderer.invoke("add-profile", text),
   removeProfile: (id) => ipcRenderer.invoke("remove-profile", id),
   connect: (id) => ipcRenderer.invoke("connect", id),

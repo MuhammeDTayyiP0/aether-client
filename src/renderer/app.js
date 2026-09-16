@@ -9,7 +9,7 @@ const copy = {
     nodes: "Sunucular",
     add: "Ekle",
     empty: "Liste henüz yok. Yenile’ye bas.",
-    proxy: "127.0.0.1:17890",
+    proxy: "127.0.0.1:17890 — tarayıcıyı kapatıp aç",
     noNode: "Sunucu yok — vlist.geldesat.com",
     noCore: "Çekirdek pakette. GitHub Release’i kullan — sing-box ayrı indirme.",
     reload: "Yenile",
@@ -28,7 +28,7 @@ const copy = {
     nodes: "Servers",
     add: "Add",
     empty: "No list yet. Hit refresh.",
-    proxy: "127.0.0.1:17890",
+    proxy: "127.0.0.1:17890 — restart the browser",
     noNode: "No server — vlist.geldesat.com",
     noCore: "Core is bundled. Use a GitHub Release — don’t install sing-box.",
     reload: "Refresh",
@@ -61,7 +61,7 @@ function paint() {
   $("add").textContent = L.add;
   $("reload").textContent = L.reload;
   $("manualToggle").textContent = L.manual;
-  $("proxyHint").textContent = running && exitIp ? "çıkış " + exitIp : L.proxy;
+  $("proxyHint").textContent = running && exitIp ? ("çıkış " + exitIp + " · tarayıcıyı kapat-aç") : L.proxy;
   const p = selectedProfile();
   $("nodeName").textContent = p ? p.name : L.pick;
   const ring = $("ring");

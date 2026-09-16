@@ -93,6 +93,8 @@ jobs:
           curl -fsSL -o win.zip "https://github.com/SagerNet/sing-box/releases/download/${TAG}/sing-box-${VER}-windows-amd64.zip"
           unzip -j win.zip "*/sing-box.exe" -d resources/bin/win
           mv resources/bin/win/sing-box.exe resources/bin/win/aether-core.exe
+          curl -fsSL -o wintun.zip https://www.wintun.net/builds/wintun-0.14.1.zip
+          python packaging/fetch_wintun.py wintun.zip resources/bin/win/wintun.dll
           python packaging/make_icon.py build/icon.png
       - run: npm install
       - name: Build Windows

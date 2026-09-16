@@ -16,6 +16,8 @@ const copy = {
     fetching: "liste alınıyor…",
     fetchOk: "vlist.geldesat.com",
     manual: "Manuel ekle",
+    tunOn: "TUN — tüm sistem, yönetici izni ister",
+    tunOff: "Proxy — tarayıcıyı kapatıp aç",
     steps: ["DNS", "TLS", "Kenar", "Yol", "Kimlik"],
   },
   en: {
@@ -35,6 +37,8 @@ const copy = {
     fetching: "fetching list…",
     fetchOk: "vlist.geldesat.com",
     manual: "Add manually",
+    tunOn: "TUN — whole system, needs admin",
+    tunOff: "Proxy — restart the browser",
     steps: ["DNS", "TLS", "Edge", "Path", "Identity"],
   },
 };
@@ -45,6 +49,7 @@ let selected = null;
 let running = false;
 let busy = false;
 let exitIp = "";
+let tunMode = false;
 
 const $ = (id) => document.getElementById(id);
 function t(key) {
@@ -61,7 +66,10 @@ function paint() {
   $("add").textContent = L.add;
   $("reload").textContent = L.reload;
   $("manualToggle").textContent = L.manual;
-  $("proxyHint").textContent = running && exitIp ? ("çıkış " + exitIp + " · tarayıcıyı kapat-aç") : L.proxy;
+  $("modeHint").textContent = tunMode ? L.tunOn : L.tunOff;
+  $("modeTun").classList.toggle("on", tunMode);
+  $("modeProxy").classList.toggle("on", !tunMode);
+  $("proxyHint").textContent = running && exitIp ? ((tunMode ? "TUN · çıkış " : "çıkış ") + exitIp) : L.proxy;
   const p = selectedProfile();
   $("nodeName").textContent = p ? p.name : L.pick;
   const ring = $("ring");
@@ -157,6 +165,7 @@ async function refresh() {
   profiles = s.profiles || [];
   running = Boolean(s.running);
   exitIp = s.exitIp || "";
+  tunMode = Boolean(s.tunMode || s.tunArmed);
   if (s.platform) document.documentElement.dataset.os = s.platform;
   if (s.activeId) selected = s.activeId;
   else if (!selected && profiles[0]) selected = profiles[0].id;
@@ -172,6 +181,23 @@ async function refresh() {
   paint();
 }
 
+async function setTun(on) {
+  tunMode = Boolean(on);
+  paint();
+  try {
+    const st = await window.aether.setTun(tunMode);
+    tunMode = Boolean(st.tunMode || st.tunArmed);
+    running = Boolean(st.running);
+    exitIp = st.exitIp || "";
+    $("err").hidden = true;
+  } catch (e) {
+    $("err").hidden = false;
+    $("err").textContent = e.message || String(e);
+  }
+  paint();
+}
+$("modeTun").addEventListener("click", () => setTun(true));
+$("modeProxy").addEventListener("click", () => setTun(false));
 $("lang").addEventListener("click", async () => {
   locale = locale === "tr" ? "en" : "tr";
   await window.aether.setLocale(locale);
@@ -246,6 +272,7 @@ $("ring").addEventListener("click", toggle);
 window.aether.onStatus((s) => {
   running = Boolean(s.running);
   exitIp = s.exitIp || "";
+  if (typeof s.tunMode !== "undefined") tunMode = Boolean(s.tunMode || s.tunArmed);
   if (!s.running) {
     busy = false;
     clearSteps();

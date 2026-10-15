@@ -52,6 +52,7 @@ let child = null;
 let activeId = null;
 let lastExitIp = "";
 let proxyArmed = false;
+let tunActive = false;
 let quitting = false;
 
 function storePath() {
@@ -92,6 +93,7 @@ function send(channel, payload) {
 
 function statusPayload(extra) {
   extra = extra || {};
+  const store = loadStore();
   return Object.assign({
     running: Boolean(child),
     activeId,
@@ -100,6 +102,8 @@ function statusPayload(extra) {
     vlist: VLIST_URLS[0],
     platform: process.platform,
     exitIp: lastExitIp || "",
+    tunMode: Boolean(store.tunMode),
+    tunArmed: Boolean(tunActive),
   }, extra);
 }
 
@@ -149,6 +153,7 @@ function stopCore() {
   child = null;
   activeId = null;
   lastExitIp = "";
+  tunActive = false;
   if (proc && proc.pid) killPid(proc.pid);
   try { fs.unlinkSync(pidPath()); } catch {}
   clearSystemProxy();
@@ -193,7 +198,9 @@ function applySystemProxy() {
     proxyArmed = true;
     return;
   }
+  // Linux desteği: GNOME, KDE Plasma ve XFCE/Pardus
   try {
+    // 1. GNOME / Cinnamon
     execFileSync("gsettings", ["set", "org.gnome.system.proxy", "mode", "manual"], { timeout: 2000 });
     execFileSync("gsettings", ["set", "org.gnome.system.proxy.http", "host", "127.0.0.1"], { timeout: 2000 });
     execFileSync("gsettings", ["set", "org.gnome.system.proxy.http", "port", String(LOCAL_PORT)], { timeout: 2000 });
@@ -201,6 +208,13 @@ function applySystemProxy() {
     execFileSync("gsettings", ["set", "org.gnome.system.proxy.https", "port", String(LOCAL_PORT)], { timeout: 2000 });
     execFileSync("gsettings", ["set", "org.gnome.system.proxy.socks", "host", "127.0.0.1"], { timeout: 2000 });
     execFileSync("gsettings", ["set", "org.gnome.system.proxy.socks", "port", String(LOCAL_PORT)], { timeout: 2000 });
+    proxyArmed = true;
+  } catch {}
+  try {
+    // 2. KDE Plasma
+    execFileSync("kwriteconfig5", ["--file", "kioslaverc", "--group", "Proxy Settings", "--key", "ProxyType", "1"], { timeout: 2000 });
+    execFileSync("kwriteconfig5", ["--file", "kioslaverc", "--group", "Proxy Settings", "--key", "httpProxy", "http://127.0.0.1:" + LOCAL_PORT], { timeout: 2000 });
+    execFileSync("kwriteconfig5", ["--file", "kioslaverc", "--group", "Proxy Settings", "--key", "httpsProxy", "http://127.0.0.1:" + LOCAL_PORT], { timeout: 2000 });
     proxyArmed = true;
   } catch {}
 }
@@ -220,6 +234,7 @@ function clearSystemProxy() {
   }
   if (!proxyArmed) return;
   try { execFileSync("gsettings", ["set", "org.gnome.system.proxy", "mode", "none"], { timeout: 2000 }); } catch {}
+  try { execFileSync("kwriteconfig5", ["--file", "kioslaverc", "--group", "Proxy Settings", "--key", "ProxyType", "0"], { timeout: 2000 }); } catch {}
   proxyArmed = false;
 }
 
@@ -362,7 +377,8 @@ function probeSocks() {
 }
 
 function probeViaProxy() {
-  return probeOne("http://api.ipify.org/")
+  return probeOne("http://1.1.1.1/cdn-cgi/trace")
+    .catch(function () { return probeOne("http://api.ipify.org/"); })
     .catch(function () { return probeOne("http://ipv4.icanhazip.com/"); })
     .catch(function () { return probeSocks(); });
 }
@@ -441,7 +457,10 @@ function hardenTls(tlsObj, sni) {
   next.insecure = true;
   if (sni) next.server_name = sni;
   else if (!next.server_name) next.server_name = "vpn.geldesat.com";
-  delete next.utls;
+  next.utls = {
+    enabled: true,
+    fingerprint: "chrome",
+  };
   delete next.alpn;
   delete next.disable_sni;
   return next;
@@ -486,9 +505,25 @@ function singboxFromVless(link) {
   const port = Number(u.port || 443);
   const q = u.searchParams;
   const name = decodeURIComponent(u.hash.replace(/^#/, "")) || host;
-  const wsPath = decodeURIComponent(q.get("path") || "/");
+  const type = (q.get("type") || "ws").toLowerCase();
   const sni = q.get("sni") || host;
-  const wsHost = q.get("host") || host;
+  
+  let transportObj = {};
+  if (type === "grpc") {
+    transportObj = {
+      type: "grpc",
+      service_name: q.get("serviceName") || "aether-grpc",
+    };
+  } else {
+    const wsPath = decodeURIComponent(q.get("path") || "/");
+    const wsHost = q.get("host") || host;
+    transportObj = {
+      type: "ws",
+      path: wsPath,
+      headers: { Host: wsHost },
+    };
+  }
+
   return {
     name: name,
     domain: host,
@@ -498,7 +533,7 @@ function singboxFromVless(link) {
         type: "vless", tag: "proxy", server: host, server_port: port, uuid: uuid,
         packet_encoding: "xudp",
         tls: hardenTls({ enabled: true }, sni),
-        transport: { type: "ws", path: wsPath, headers: { Host: wsHost } },
+        transport: transportObj,
       }],
     }),
   };
@@ -589,13 +624,46 @@ async function startCore(id) {
   const bin = corePath();
   if (!fs.existsSync(bin)) throw new Error("Cekirdek yok — GitHub Release paketini kullan");
   const cfgPath = path.join(app.getPath("userData"), "active.json");
+  const isTun = Boolean(store.tunMode);
   const cfg = migrateConfig(profile.config);
-  if (Array.isArray(cfg.inbounds)) {
-    cfg.inbounds = cfg.inbounds.map(function (ib) {
-      if (!ib || ib.type !== "mixed") return ib;
-      return Object.assign({}, ib, { listen: "127.0.0.1", listen_port: LOCAL_PORT });
-    });
+
+  if (isTun) {
+    tunActive = true;
+    cfg.inbounds = [
+      {
+        type: "tun",
+        tag: "tun-in",
+        interface_name: "aether-tun",
+        inet4_address: "172.19.0.1/30",
+        auto_route: true,
+        strict_route: false,
+        stack: "system",
+        sniff: true,
+      },
+      {
+        type: "mixed",
+        tag: "mixed-in",
+        listen: "127.0.0.1",
+        listen_port: LOCAL_PORT,
+      },
+    ];
+    cfg.dns = {
+      servers: [
+        { tag: "remote", address: "https://1.1.1.1/dns-query", detour: "proxy" },
+        { tag: "local", address: "local", detour: "direct" },
+      ],
+      strategy: "prefer_ipv4",
+    };
+  } else {
+    tunActive = false;
+    if (Array.isArray(cfg.inbounds)) {
+      cfg.inbounds = cfg.inbounds.map(function (ib) {
+        if (!ib || ib.type !== "mixed") return ib;
+        return Object.assign({}, ib, { listen: "127.0.0.1", listen_port: LOCAL_PORT });
+      });
+    }
   }
+
   const uplink = detectUplink();
   if (uplink && Array.isArray(cfg.outbounds)) {
     cfg.outbounds = cfg.outbounds.map(function (o) {
@@ -613,7 +681,7 @@ async function startCore(id) {
   proc.stderr.on("data", function (d) { errBuf += d.toString(); if (errBuf.length > 4000) errBuf = errBuf.slice(-2000); });
   proc.on("exit", function (code) {
     if (child === proc) {
-      child = null; activeId = null; lastExitIp = "";
+      child = null; activeId = null; lastExitIp = ""; tunActive = false;
       try { fs.unlinkSync(pidPath()); } catch {}
       clearSystemProxy();
       send("status", statusPayload({ lastError: code ? friendlyErr(stripAnsi(errBuf) || "cikis " + code) : "" }));
@@ -621,7 +689,9 @@ async function startCore(id) {
   });
   try {
     lastExitIp = await waitForTunnel();
-    applySystemProxy();
+    if (!isTun) {
+      applySystemProxy();
+    }
     send("status", statusPayload());
     return statusPayload();
   } catch (e) {
@@ -722,6 +792,13 @@ ipcMain.handle("set-locale", function (_e, locale) {
   store.locale = locale === "en" ? "en" : "tr";
   saveStore(store);
   return store.locale;
+});
+ipcMain.handle("set-tun", function (_e, on) {
+  const store = loadStore();
+  store.tunMode = Boolean(on);
+  saveStore(store);
+  send("status", statusPayload({ tunMode: store.tunMode }));
+  return statusPayload({ tunMode: store.tunMode });
 });
 ipcMain.handle("add-profile", function (_e, text) { return addFromText(text); });
 ipcMain.handle("remove-profile", function (_e, id) {

@@ -11,6 +11,7 @@
     "url": "https://github.com/MuhammeDTayyiP0/aether-client.git"
   },
   "scripts": {
+    "dev": "electron .",
     "start": "electron .",
     "pack": "electron-builder --dir",
     "dist": "electron-builder"

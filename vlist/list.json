@@ -1,8 +1,12 @@
 {
   "nodes": [
     {
-      "name": "Aether",
-      "vless": "vless://BURAYA-UUID@gate.ornek.com:443?encryption=none&security=tls&sni=gate.ornek.com&fp=chrome&type=ws&host=gate.ornek.com&path=%2Faether-xxxxxxxx#Aether"
+      "name": "Aether (gRPC - En Hızlı)",
+      "vless": "vless://a34d5014-2895-46ce-96c3-5b872a4a79fe@vpn.geldesat.com:443?encryption=none&security=tls&sni=vpn.geldesat.com&fp=chrome&type=grpc&serviceName=aether-grpc&mode=multi#Aether%20(gRPC)"
+    },
+    {
+      "name": "Aether (WebSocket - Standart)",
+      "vless": "vless://a34d5014-2895-46ce-96c3-5b872a4a79fe@vpn.geldesat.com:443?encryption=none&security=tls&sni=vpn.geldesat.com&fp=chrome&type=ws&host=vpn.geldesat.com&path=%2Frasgelekrktr#Aether%20(WS)"
     }
   ]
 }

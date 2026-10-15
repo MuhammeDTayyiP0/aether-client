@@ -1,0 +1,8 @@
+{
+  "nodes": [
+    {
+      "name": "Aether",
+      "vless": "vless://BURAYA-UUID@gate.ornek.com:443?encryption=none&security=tls&sni=gate.ornek.com&fp=chrome&type=ws&host=gate.ornek.com&path=%2Faether-xxxxxxxx#Aether"
+    }
+  ]
+}

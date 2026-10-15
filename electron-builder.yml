@@ -1,0 +1,30 @@
+appId: app.aether.client
+productName: Aether
+copyright: Aether
+asar: true
+forceCodeSigning: false
+compression: store
+directories:
+  output: dist
+  buildResources: build
+files:
+  - src/**/*
+  - package.json
+extraResources:
+  - from: resources/bin/${os}
+    to: bin
+    filter:
+      - "**/*"
+win:
+  target:
+    - zip
+  signAndEditExecutable: false
+  artifactName: aether-${version}-windows-amd64.zip
+linux:
+  target:
+    - deb
+    - tar.gz
+  category: Network
+  executableName: aether
+  maintainer: Aether <aether@local>
+  artifactName: aether-${version}-linux-amd64.${ext}

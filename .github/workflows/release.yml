@@ -20,10 +20,19 @@ jobs:
         with:
           node-version: 18
       - name: Fetch linux core
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          TAG=$(curl -fsSL https://api.github.com/repos/SagerNet/sing-box/releases/latest | jq -r .tag_name)
+          TAG=$(curl -fsSL -H "Authorization: Bearer ${GITHUB_TOKEN}" https://api.github.com/repos/SagerNet/sing-box/releases/latest 2>/dev/null | jq -r .tag_name || true)
+          if [ -z "$TAG" ] || [ "$TAG" = "null" ]; then
+            TAG=$(curl -fsSI "https://github.com/SagerNet/sing-box/releases/latest" | grep -i "^location:" | sed -e 's/.*tag\///' | tr -d '\r\n')
+          fi
+          if [ -z "$TAG" ] || [ "$TAG" = "null" ]; then
+            TAG="v1.11.4"
+          fi
           VER="${TAG#v}"
+          echo "Sing-box version: $TAG ($VER)"
           mkdir -p resources/bin/linux build
           curl -fsSL -o linux.tgz "https://github.com/SagerNet/sing-box/releases/download/${TAG}/sing-box-${VER}-linux-amd64.tar.gz"
           tar -xzf linux.tgz
@@ -85,15 +94,24 @@ jobs:
           node-version: 18
       - name: Fetch windows core
         shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          TAG=$(curl -fsSL https://api.github.com/repos/SagerNet/sing-box/releases/latest | jq -r .tag_name)
+          TAG=$(curl -fsSL -H "Authorization: Bearer ${GITHUB_TOKEN}" https://api.github.com/repos/SagerNet/sing-box/releases/latest 2>/dev/null | jq -r .tag_name || true)
+          if [ -z "$TAG" ] || [ "$TAG" = "null" ]; then
+            TAG=$(curl -fsSI "https://github.com/SagerNet/sing-box/releases/latest" | grep -i "^location:" | sed -e 's/.*tag\///' | tr -d '\r\n')
+          fi
+          if [ -z "$TAG" ] || [ "$TAG" = "null" ]; then
+            TAG="v1.11.4"
+          fi
           VER="${TAG#v}"
+          echo "Sing-box version: $TAG ($VER)"
           mkdir -p resources/bin/win build
           curl -fsSL -o win.zip "https://github.com/SagerNet/sing-box/releases/download/${TAG}/sing-box-${VER}-windows-amd64.zip"
           unzip -j win.zip "*/sing-box.exe" -d resources/bin/win
           mv resources/bin/win/sing-box.exe resources/bin/win/aether-core.exe
-          curl -fsSL -o wintun.zip https://www.wintun.net/builds/wintun-0.14.1.zip
+          curl -fsSL -A "Mozilla/5.0" -o wintun.zip https://www.wintun.net/builds/wintun-0.14.1.zip
           python packaging/fetch_wintun.py wintun.zip resources/bin/win/wintun.dll
           python packaging/make_icon.py build/icon.png
       - run: npm install

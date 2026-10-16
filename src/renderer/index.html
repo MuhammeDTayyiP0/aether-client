@@ -34,21 +34,27 @@
         </section>
 
         <button type="button" class="go" id="go">Bağlan</button>
-        <div class="modes">
-          <button type="button" class="mode on" id="modeProxy">Proxy</button>
-          <button type="button" class="mode" id="modeTun">TUN</button>
-        </div>
-        <p class="mode-hint" id="modeHint">sadece tarayıcı — yönetici gerekmez</p>
 
-        <div class="modes proto-modes">
-          <button type="button" class="mode on" id="protoAuto" data-proto="auto">Oto</button>
-          <button type="button" class="mode" id="protoGrpc" data-proto="grpc">gRPC (Hızlı)</button>
-          <button type="button" class="mode" id="protoWs" data-proto="ws">WebSocket</button>
+        <div class="control-deck">
+          <div class="deck-col">
+            <span class="deck-label" id="modeHint">Mod: Proxy</span>
+            <div class="modes">
+              <button type="button" class="mode on" id="modeProxy">Proxy</button>
+              <button type="button" class="mode" id="modeTun">TUN</button>
+            </div>
+          </div>
+          <div class="deck-col">
+            <span class="deck-label" id="protoHint">Protokol: Oto</span>
+            <div class="modes proto-modes">
+              <button type="button" class="mode on" id="protoAuto" data-proto="auto">Oto</button>
+              <button type="button" class="mode" id="protoGrpc" data-proto="grpc">gRPC</button>
+              <button type="button" class="mode" id="protoWs" data-proto="ws">WS</button>
+            </div>
+          </div>
         </div>
-        <p class="mode-hint" id="protoHint">Protokol: Otomatik (Düğüm varsayılanı)</p>
 
         <div id="browserRow" class="browser-row" hidden>
-          <button type="button" class="browser-btn" id="launchBrowserBtn">🌐 Tarayıcıyı VPN ile Başlat</button>
+          <button type="button" class="browser-btn" id="launchBrowserBtn">🌐 Tarayıcıyı (Chrome) Başlat</button>
         </div>
 
         <ol class="steps" id="steps" hidden></ol>

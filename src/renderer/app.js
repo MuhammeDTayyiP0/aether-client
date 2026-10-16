@@ -94,8 +94,9 @@ function paint() {
   if (busy) {
     ring.dataset.state = "busy";
     $("stateLabel").textContent = L.busy;
-    $("go").textContent = L.busy;
-    $("go").disabled = true;
+    $("go").textContent = "İptal Et ✕";
+    $("go").disabled = false;
+    $("go").classList.add("cancel");
     $("go").classList.remove("on");
     pill.textContent = L.busy;
     pill.classList.remove("on");
@@ -104,6 +105,7 @@ function paint() {
     $("stateLabel").textContent = L.up;
     $("go").textContent = L.stop;
     $("go").disabled = false;
+    $("go").classList.remove("cancel");
     $("go").classList.add("on");
     pill.textContent = L.up;
     pill.classList.add("on");
@@ -112,6 +114,7 @@ function paint() {
     $("stateLabel").textContent = L.down;
     $("go").textContent = L.go;
     $("go").disabled = !p;
+    $("go").classList.remove("cancel");
     $("go").classList.remove("on");
     pill.textContent = L.down;
     pill.classList.remove("on");
@@ -272,6 +275,13 @@ $("reload").addEventListener("click", async () => {
 
 async function toggle() {
   $("err").hidden = true;
+  if (busy) {
+    busy = false;
+    clearSteps();
+    try { await window.aether.disconnect(); } catch {}
+    paint();
+    return;
+  }
   if (running) {
     await window.aether.disconnect();
     running = false;

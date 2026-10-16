@@ -7,121 +7,175 @@
       content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' data:"
     />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Aether</title>
+    <title>Aether Shield</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
     <div class="shell">
-      <!-- Titlebar -->
+      <!-- Ambient Lighting Nebulas -->
+      <div class="ambient-glow ambient-top" id="ambientTop"></div>
+      <div class="ambient-glow ambient-bottom" id="ambientBottom"></div>
+
+      <!-- Luxury Titlebar -->
       <header class="titlebar">
         <div class="brand">
-          <div class="logo-wrap">
-            <svg class="logo" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-              <circle cx="12" cy="12" r="9" stroke-width="1.8" stroke-dasharray="36" stroke-dashoffset="10" />
-              <circle cx="12" cy="12" r="4" fill="currentColor" />
+          <div class="brand-crest">
+            <svg class="crest-svg" viewBox="0 0 24 24" fill="none">
+              <path d="M12 2L3 7V12C3 17.5 7 21.5 12 22C17 21.5 21 17.5 21 12V7L12 2Z" stroke="url(#crestGrad)" stroke-width="1.8" />
+              <circle cx="12" cy="12" r="3" fill="#38bdf8" />
+              <defs>
+                <linearGradient id="crestGrad" x1="3" y1="2" x2="21" y2="22">
+                  <stop stop-color="#38bdf8" />
+                  <stop offset="1" stop-color="#10b981" />
+                </linearGradient>
+              </defs>
             </svg>
           </div>
-          <span class="brand-name">Aether</span>
-        </div>
-        <div class="titlebar-actions">
-          <div class="pill" id="pill">
-            <span class="pill-dot"></span>
-            <span class="pill-text">kesik</span>
+          <div class="brand-meta">
+            <span class="brand-name">AETHER</span>
+            <span class="brand-tag">QUANTUM SHIELD</span>
           </div>
-          <button type="button" id="lang" class="lang-btn" title="Dili Değiştir">TR</button>
+        </div>
+
+        <div class="titlebar-controls">
+          <div class="shield-badge" id="pill">
+            <span class="shield-dot"></span>
+            <span class="shield-text">KESİK</span>
+          </div>
+          <button type="button" id="lang" class="lang-switch" title="Dili Değiştir">TR</button>
         </div>
       </header>
 
-      <!-- Main Scrollable Area -->
+      <!-- Main Stage -->
       <main class="main">
-        <!-- Power Core Stage -->
-        <section class="stage">
-          <div class="ring-wrapper">
-            <button type="button" class="ring" id="ring" data-state="down" aria-label="Bağlan">
-              <div class="ring-glow"></div>
-              <div class="ring-core">
-                <svg class="power-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
-                  <path d="M18.36 6.64a9 9 0 1 1-12.73 0" />
-                  <line x1="12" y1="2" x2="12" y2="12" />
-                </svg>
+        <!-- Holographic Core Stage -->
+        <section class="core-stage">
+          <div class="dial-container">
+            <!-- Pulsing Radar / Aura Rings -->
+            <div class="radar-aura" id="radarAura"></div>
+            <div class="radar-ring radar-ring-outer"></div>
+            <div class="radar-ring radar-ring-mid"></div>
+
+            <!-- Interactive Power Dial -->
+            <button type="button" class="power-dial" id="ring" data-state="down" aria-label="Bağlantıyı Başlat">
+              <div class="dial-bevel">
+                <div class="dial-lens">
+                  <div class="dial-sheen"></div>
+                  <div class="dial-icon-wrap">
+                    <svg class="dial-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                      <path class="svg-orbit" d="M12 3a9 9 0 0 0-9 9c0 3.6 2.1 6.7 5.2 8.1M12 3a9 9 0 0 1 9 9c0 3.6-2.1 6.7-5.2 8.1" stroke-width="1.8" stroke-linecap="round" />
+                      <line class="svg-pin" x1="12" y1="2" x2="12" y2="12" stroke-width="2.2" stroke-linecap="round" />
+                    </svg>
+                  </div>
+                </div>
               </div>
             </button>
           </div>
 
-          <div class="stage-info">
-            <div class="status-indicator">
-              <span class="status-beacon" id="beacon"></span>
-              <span class="state" id="stateLabel">BAĞLANTI YOK</span>
+          <!-- Status & Node Info -->
+          <div class="core-meta">
+            <div class="status-lead">
+              <span class="pulse-beacon" id="beacon"></span>
+              <span class="status-title" id="stateLabel">BAĞLANTI BEKLENİYOR</span>
             </div>
-            <h1 class="node-name" id="nodeName">Sunucu Seçilmedi</h1>
-            <div id="ipChip" class="ip-chip" hidden>
-              <span class="ip-icon">🌐</span>
-              <span id="ipValue" class="ip-val"></span>
+            <div class="node-showcase">
+              <span class="node-display" id="nodeName">Sunucu Seçilmedi</span>
+            </div>
+
+            <!-- Live Telemetry Bar -->
+            <div class="telemetry-bar" id="telemetryBar">
+              <div class="telemetry-item" id="ipBadge" title="Aktif Dış IP">
+                <span class="t-icon">🌐</span>
+                <span class="t-val" id="ipValue">127.0.0.1</span>
+              </div>
+              <div class="telemetry-sep"></div>
+              <div class="telemetry-item" title="Tünel Gecikmesi">
+                <span class="t-icon">⚡</span>
+                <span class="t-val" id="pingValue">Ultra Hızlı</span>
+              </div>
+              <div class="telemetry-sep"></div>
+              <div class="telemetry-item" title="Güvenlik">
+                <span class="t-icon">🛡️</span>
+                <span class="t-val">TLS 1.3</span>
+              </div>
             </div>
           </div>
         </section>
 
-        <!-- Primary Action Button -->
-        <div class="action-wrap">
-          <button type="button" class="go" id="go">Bağlan</button>
+        <!-- Master Action Button -->
+        <div class="action-dock">
+          <button type="button" class="master-btn" id="go">
+            <span class="btn-flare"></span>
+            <span class="btn-text" id="goText">Bağlantıyı Başlat</span>
+            <span class="btn-arrow">→</span>
+          </button>
         </div>
 
-        <!-- Mode & Protocol Deck -->
-        <div class="control-deck">
-          <!-- Proxy / TUN Mode Card -->
-          <div class="deck-card">
-            <div class="card-header">
-              <span class="card-title">Çalışma Modu</span>
-              <span class="card-hint" id="modeHint">Tarayıcı & Sistem Proxy</span>
+        <!-- Cockpit Controls (Mode & Protocol) -->
+        <div class="cockpit-deck">
+          <!-- Proxy / TUN Card -->
+          <div class="cockpit-card">
+            <div class="card-caption">
+              <span class="caption-title">Tünel Modu</span>
+              <span class="caption-desc" id="modeHint">Sistem Proxy</span>
             </div>
-            <div class="segmented-control">
-              <button type="button" class="seg-btn on" id="modeProxy">Proxy</button>
-              <button type="button" class="seg-btn" id="modeTun">TUN</button>
+            <div class="cockpit-segmented">
+              <button type="button" class="cockpit-tab on" id="modeProxy">
+                <span class="tab-icon">⚡</span>
+                <span>Proxy</span>
+              </button>
+              <button type="button" class="cockpit-tab" id="modeTun">
+                <span class="tab-icon">🛡️</span>
+                <span>TUN</span>
+              </button>
             </div>
           </div>
 
-          <!-- Protocol Switcher Card -->
-          <div class="deck-card">
-            <div class="card-header">
-              <span class="card-title">Protokol</span>
-              <span class="card-hint" id="protoHint">Otomatik</span>
+          <!-- Protocol Selector Card -->
+          <div class="cockpit-card">
+            <div class="card-caption">
+              <span class="caption-title">Protokol</span>
+              <span class="caption-desc" id="protoHint">Otomatik</span>
             </div>
-            <div class="segmented-control proto-segmented">
-              <button type="button" class="seg-btn on" id="protoAuto" data-proto="auto" title="Otomatik">Oto</button>
-              <button type="button" class="seg-btn" id="protoWs" data-proto="ws" title="WebSocket - MEB & Tahta Standartı">WS</button>
-              <button type="button" class="seg-btn" id="protoUpg" data-proto="upg" title="HTTPUpgrade - Yeni Nesil Stealth CDN">UPG</button>
-              <button type="button" class="seg-btn" id="protoGrpc" data-proto="grpc" title="gRPC - HTTP/2 Yüksek Hız">gRPC</button>
+            <div class="cockpit-segmented proto-segmented">
+              <button type="button" class="cockpit-tab on" id="protoAuto" data-proto="auto" title="Otomatik Tünel">Oto</button>
+              <button type="button" class="cockpit-tab" id="protoUpg" data-proto="upg" title="HTTPUpgrade - MEB & CDN En Hızlı">UPG</button>
+              <button type="button" class="cockpit-tab" id="protoWs" data-proto="ws" title="WebSocket - Standart">WS</button>
+              <button type="button" class="cockpit-tab" id="protoGrpc" data-proto="grpc" title="gRPC - HTTP/2 Akış">gRPC</button>
             </div>
           </div>
         </div>
 
-        <!-- Quick Launch Chrome (Linux/Windows Helper) -->
+        <!-- Quick Browser Launcher (Linux/Windows) -->
         <div id="browserRow" class="browser-row" hidden>
-          <button type="button" class="browser-btn" id="launchBrowserBtn">
-            <span class="b-icon">🚀</span>
-            <span>Chrome'u VPN ile Başlat</span>
+          <button type="button" class="chrome-launch-btn" id="launchBrowserBtn">
+            <span class="launch-icon">🌐</span>
+            <span>Chrome'u Tünel ile Başlat</span>
+            <span class="launch-tag">İzole Profil</span>
           </button>
         </div>
 
         <!-- Connection Pipeline Steps -->
-        <ol class="steps" id="steps" hidden></ol>
+        <ol class="pipeline-track" id="steps" hidden></ol>
 
-        <!-- Error Banner -->
-        <div class="err-box" id="errBox" hidden>
-          <div class="err-icon">⚠️</div>
-          <p class="err" id="err"></p>
+        <!-- Error Notification Toast -->
+        <div class="alert-toast" id="errBox" hidden>
+          <div class="alert-icon">⚠️</div>
+          <div class="alert-content">
+            <p class="err-text" id="err"></p>
+          </div>
         </div>
 
-        <!-- Servers Deck -->
-        <section class="server-card">
-          <div class="server-card-head">
-            <div class="server-title-group">
-              <h2 id="nodesTitle">Sunucular</h2>
-              <span class="server-badge" id="serverCount">0</span>
+        <!-- Server Blade Deck -->
+        <section class="blade-section">
+          <div class="blade-header">
+            <div class="blade-headline">
+              <h2 id="nodesTitle">Düğümler</h2>
+              <span class="blade-counter" id="serverCount">0</span>
             </div>
-            <div class="head-actions">
-              <span class="fetch-hint" id="fetchHint">vlist.geldesat.com</span>
-              <button type="button" class="refresh-btn" id="reload" title="Sunucu listesini güncelle">
+            <div class="blade-actions">
+              <span class="hub-url" id="fetchHint">vlist.geldesat.com</span>
+              <button type="button" class="blade-refresh-btn" id="reload" title="Düğümleri Güncelle">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
                   <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2" />
                 </svg>
@@ -129,31 +183,33 @@
             </div>
           </div>
 
-          <div class="nodes-container">
-            <ul class="nodes" id="nodes"></ul>
+          <div class="nodes-scroller">
+            <ul class="blade-list" id="nodes"></ul>
           </div>
 
-          <div class="manual-section">
-            <button type="button" class="manual-toggle-btn" id="manualToggle">
-              <span>Manuel VLESS Ekle</span>
-              <span class="arrow">▾</span>
+          <!-- Manual Import Drawer -->
+          <div class="manual-drawer">
+            <button type="button" class="drawer-trigger" id="manualToggle">
+              <span class="drawer-title">+ Manuel VLESS Profili Ekle</span>
+              <span class="drawer-arrow">▾</span>
             </button>
-            <div id="manual" class="manual" hidden>
+            <div id="manual" class="drawer-body" hidden>
               <textarea id="paste" rows="2" spellcheck="false" placeholder="vless://..."></textarea>
-              <button type="button" class="add-btn" id="add">Ekle</button>
+              <button type="button" class="drawer-add-btn" id="add">Profili İçe Aktar</button>
             </div>
           </div>
         </section>
       </main>
 
-      <!-- Footer Bar -->
-      <footer class="foot">
-        <div class="foot-left">
-          <span class="foot-dot"></span>
-          <span id="proxyHint" class="proxy-text">127.0.0.1:17890</span>
+      <!-- Luxury Footer -->
+      <footer class="footbar">
+        <div class="footbar-left">
+          <span class="port-indicator"></span>
+          <span id="proxyHint" class="port-label">Proxy: 127.0.0.1:17890</span>
         </div>
-        <div class="foot-right">
-          <span class="credit">Aether v1.2</span>
+        <div class="footbar-right">
+          <span class="edition-tag">Aether Ultra</span>
+          <span class="version-tag">v1.2</span>
         </div>
       </footer>
     </div>

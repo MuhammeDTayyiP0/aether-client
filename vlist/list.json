@@ -1,12 +1,16 @@
 {
   "nodes": [
     {
-      "name": "Aether (gRPC - En Hızlı)",
-      "vless": "vless://a34d5014-2895-46ce-96c3-5b872a4a79fe@vpn.geldesat.com:443?encryption=none&security=tls&sni=vpn.geldesat.com&fp=chrome&type=grpc&serviceName=aether-grpc&mode=multi#Aether%20(gRPC)"
+      "name": "Aether (HTTPUpgrade - MEB & CDN En Hızlı)",
+      "vless": "vless://a34d5014-2895-46ce-96c3-5b872a4a79fe@vpn.geldesat.com:443?encryption=none&security=tls&sni=vpn.geldesat.com&fp=chrome&type=httpupgrade&host=vpn.geldesat.com&path=%2Frasgelekrktr-upg#Aether%20(HTTPUpgrade)"
     },
     {
-      "name": "Aether (WebSocket - Standart)",
+      "name": "Aether (WebSocket - Akıllı Tahta & Mobil)",
       "vless": "vless://a34d5014-2895-46ce-96c3-5b872a4a79fe@vpn.geldesat.com:443?encryption=none&security=tls&sni=vpn.geldesat.com&fp=chrome&type=ws&host=vpn.geldesat.com&path=%2Frasgelekrktr#Aether%20(WS)"
+    },
+    {
+      "name": "Aether (gRPC - Düşük Gecikme)",
+      "vless": "vless://a34d5014-2895-46ce-96c3-5b872a4a79fe@vpn.geldesat.com:443?encryption=none&security=tls&sni=vpn.geldesat.com&fp=chrome&type=grpc&serviceName=aether-grpc#Aether%20(gRPC)"
     }
   ]
 }

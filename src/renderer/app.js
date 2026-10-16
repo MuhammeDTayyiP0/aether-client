@@ -1,45 +1,45 @@
 const copy = {
   tr: {
-    down: "bağlantı kesik",
-    busy: "bağlanıyor…",
-    up: "güvenli ve bağlı",
-    pick: "sunucu bekleniyor",
-    go: "Bağlan",
-    stop: "Bağlantıyı Kes",
-    nodes: "Sunucular",
-    add: "Ekle",
-    empty: "Liste henüz yok. Yenile’ye bas.",
-    proxy: "127.0.0.1:17890",
+    down: "BAĞLANTI BEKLENİYOR",
+    busy: "BAĞLANTI KURULUYOR…",
+    up: "GÜVENLİ VE ŞİFRELİ",
+    pick: "Sunucu Bekleniyor",
+    go: "Bağlantıyı Başlat",
+    stop: "Bağlantıyı Güvenle Kes",
+    nodes: "Düğümler",
+    add: "Profili İçe Aktar",
+    empty: "Düğüm listesi henüz yok. Yenile'ye basın.",
+    proxy: "Proxy: 127.0.0.1:17890",
     noNode: "Sunucu yok — vlist.geldesat.com",
-    noCore: "Çekirdek pakette. GitHub Release’i kullan — sing-box ayrı indirme.",
+    noCore: "Çekirdek pakette. GitHub Release'i kullanın — sing-box ayrı indirmeyin.",
     reload: "Yenile",
-    fetching: "liste alınıyor…",
+    fetching: "liste çekiliyor…",
     fetchOk: "vlist.geldesat.com",
-    manual: "Manuel VLESS Ekle",
-    tunOn: "Tüm Sistem (Yönetici)",
-    tunOff: "Tarayıcı & Sistem Proxy",
-    steps: ["DNS Çözme", "TLS El Sıkışma", "Kenar Tüneli", "Yol Doğrulama", "Kimlik Onayı"],
+    manual: "+ Manuel VLESS Ekle",
+    tunOn: "Full TUN Modu (Yönetici)",
+    tunOff: "Sistem & Tarayıcı Proxy",
+    steps: ["DNS Çözümleme", "TLS 1.3 El Sıkışma", "Kenar Tüneli", "Yol Doğrulama", "Kimlik Onayı"],
   },
   en: {
-    down: "disconnected",
-    busy: "connecting…",
-    up: "secured & active",
-    pick: "waiting for node",
-    go: "Connect",
-    stop: "Disconnect",
-    nodes: "Servers",
-    add: "Add",
-    empty: "No servers yet. Hit refresh.",
-    proxy: "127.0.0.1:17890",
+    down: "DISCONNECTED",
+    busy: "ESTABLISHING TUNNEL…",
+    up: "SECURED & ENCRYPTED",
+    pick: "Waiting for Node",
+    go: "Initialize Tunnel",
+    stop: "Safely Disconnect",
+    nodes: "Nodes",
+    add: "Import Profile",
+    empty: "No nodes available yet. Hit refresh.",
+    proxy: "Proxy: 127.0.0.1:17890",
     noNode: "No server — vlist.geldesat.com",
     noCore: "Core is bundled. Use GitHub Release — do not install sing-box.",
     reload: "Refresh",
     fetching: "fetching list…",
     fetchOk: "vlist.geldesat.com",
-    manual: "Add VLESS Manually",
-    tunOn: "Full System (Admin)",
-    tunOff: "Browser & System Proxy",
-    steps: ["DNS Resolve", "TLS Handshake", "Edge Tunnel", "Path Verify", "Auth Check"],
+    manual: "+ Add Manual VLESS",
+    tunOn: "Full TUN Mode (Admin)",
+    tunOff: "System & Browser Proxy",
+    steps: ["DNS Resolve", "TLS 1.3 Handshake", "Edge Tunnel", "Path Verify", "Auth Check"],
   },
 };
 
@@ -71,69 +71,74 @@ function paint() {
   $("modeProxy").classList.toggle("on", !tunMode);
 
   $("protoAuto").classList.toggle("on", selectedProto === "auto");
-  $("protoWs").classList.toggle("on", selectedProto === "ws");
   if ($("protoUpg")) $("protoUpg").classList.toggle("on", selectedProto === "upg");
+  $("protoWs").classList.toggle("on", selectedProto === "ws");
   $("protoGrpc").classList.toggle("on", selectedProto === "grpc");
 
   if (selectedProto === "grpc") {
-    $("protoHint").textContent = "gRPC (HTTP/2 — Mobil Hızlı)";
+    $("protoHint").textContent = "gRPC (HTTP/2)";
   } else if (selectedProto === "upg") {
-    $("protoHint").textContent = "HTTPUpgrade (MEB & CDN)";
+    $("protoHint").textContent = "HTTPUpgrade (En Hızlı)";
   } else if (selectedProto === "ws") {
-    $("protoHint").textContent = "WebSocket (Standart)";
+    $("protoHint").textContent = "WebSocket";
   } else {
-    $("protoHint").textContent = "Otomatik";
+    $("protoHint").textContent = "Otomatik Tünel";
   }
 
   const browserRow = $("browserRow");
   if (browserRow) browserRow.hidden = !running;
 
   $("proxyHint").textContent = running && exitIp ? ((tunMode ? "TUN · " : "Proxy · ") + exitIp) : L.proxy;
-  
-  const ipChip = $("ipChip");
+
   const ipVal = $("ipValue");
-  if (ipChip && ipVal) {
-    if (running && exitIp) {
-      ipChip.hidden = false;
-      ipVal.textContent = exitIp;
-    } else {
-      ipChip.hidden = true;
-    }
+  const pingVal = $("pingValue");
+  const ambientTop = $("ambientTop");
+
+  if (ipVal) {
+    ipVal.textContent = running && exitIp ? exitIp : (tunMode ? "TUN Modu" : "127.0.0.1:17890");
   }
 
   const p = selectedProfile();
   $("nodeName").textContent = p ? p.name : L.pick;
   const ring = $("ring");
   const pill = $("pill");
-  const pillText = pill.querySelector(".pill-text");
+  const pillText = pill ? pill.querySelector(".shield-text") : null;
+  const goBtn = $("go");
+  const goText = $("goText") || goBtn;
 
   if (busy) {
     ring.dataset.state = "busy";
     $("stateLabel").textContent = L.busy;
-    $("go").textContent = "İptal Et ✕";
-    $("go").disabled = false;
-    $("go").classList.add("cancel");
-    $("go").classList.remove("on");
-    if (pillText) pillText.textContent = L.busy;
-    pill.classList.remove("on");
+    goText.textContent = "Bağlantıyı İptal Et ✕";
+    goBtn.disabled = false;
+    goBtn.classList.add("cancel");
+    goBtn.classList.remove("on");
+    if (pillText) pillText.textContent = "BAĞLANIYOR";
+    if (pill) pill.classList.remove("on");
+    if (ambientTop) ambientTop.style.background = "radial-gradient(circle, rgba(245, 158, 11, 0.25) 0%, transparent 70%)";
+    if (pingVal) pingVal.textContent = "El Sıkışılıyor…";
   } else if (running) {
     ring.dataset.state = "up";
     $("stateLabel").textContent = L.up;
-    $("go").textContent = L.stop;
-    $("go").disabled = false;
-    $("go").classList.remove("cancel");
-    $("go").classList.add("on");
-    if (pillText) pillText.textContent = L.up;
-    pill.classList.add("on");
+    goText.textContent = L.stop;
+    goBtn.disabled = false;
+    goBtn.classList.remove("cancel");
+    goBtn.classList.add("on");
+    if (pillText) pillText.textContent = "GÜVENLİ";
+    if (pill) pill.classList.add("on");
+    if (ambientTop) ambientTop.style.background = "radial-gradient(circle, rgba(16, 185, 129, 0.25) 0%, transparent 70%)";
+    if (pingVal) pingVal.textContent = "⚡ ~22 ms";
   } else {
     ring.dataset.state = "down";
     $("stateLabel").textContent = L.down;
-    $("go").textContent = L.go;
-    $("go").disabled = !p;
-    $("go").classList.remove("cancel");
-    $("go").classList.remove("on");
-    if (pillText) pillText.textContent = L.down;
-    pill.classList.remove("on");
+    goText.textContent = L.go;
+    goBtn.disabled = !p;
+    goBtn.classList.remove("cancel");
+    goBtn.classList.remove("on");
+    if (pillText) pillText.textContent = "KESİK";
+    if (pill) pill.classList.remove("on");
+    if (ambientTop) ambientTop.style.background = "radial-gradient(circle, rgba(56, 189, 248, 0.12) 0%, transparent 70%)";
+    if (pingVal) pingVal.textContent = "Ultra Hızlı";
   }
 
   if ($("serverCount")) $("serverCount").textContent = String(profiles.length);
@@ -142,7 +147,7 @@ function paint() {
   ul.innerHTML = "";
   if (!profiles.length) {
     const e = document.createElement("p");
-    e.className = "empty";
+    e.className = "blade-empty";
     e.textContent = L.empty;
     ul.appendChild(e);
     return;
@@ -150,42 +155,48 @@ function paint() {
 
   profiles.forEach((n) => {
     const li = document.createElement("li");
+    li.className = "blade-item";
     if (n.id === (selected || (p && p.id))) li.classList.add("active");
 
-    let protoTag = "WS";
-    if (n.name && (n.name.indexOf("HTTPUpgrade") !== -1 || n.name.indexOf("upg") !== -1)) protoTag = "UPG";
-    else if (n.name && n.name.indexOf("gRPC") !== -1) protoTag = "gRPC";
-    else if (n.config && n.config.outbounds && n.config.outbounds[0]) {
+    let protoClass = "";
+    let protoLabel = "WS";
+    if (n.name && (n.name.indexOf("HTTPUpgrade") !== -1 || n.name.indexOf("upg") !== -1)) {
+      protoLabel = "UPG";
+      protoClass = "upg";
+    } else if (n.name && n.name.indexOf("gRPC") !== -1) {
+      protoLabel = "gRPC";
+      protoClass = "grpc";
+    } else if (n.config && n.config.outbounds && n.config.outbounds[0]) {
       const trans = n.config.outbounds[0].transport || {};
-      if (trans.type === "grpc") protoTag = "gRPC";
-      else if (trans.type === "httpupgrade") protoTag = "UPG";
+      if (trans.type === "grpc") { protoLabel = "gRPC"; protoClass = "grpc"; }
+      else if (trans.type === "httpupgrade") { protoLabel = "UPG"; protoClass = "upg"; }
     }
 
     li.innerHTML = `
-      <span class="dot"></span>
-      <div class="meta">
-        <div class="meta-top">
-          <span class="node-title"></span>
-          <div class="meta-tags">
-            <span class="proto-tag">${protoTag}</span>
-            <span class="ping-tag">⚡ Aktif</span>
+      <span class="blade-dot"></span>
+      <div class="blade-body">
+        <div class="blade-top">
+          <span class="blade-name"></span>
+          <div class="blade-badges">
+            <span class="badge-proto ${protoClass}">${protoLabel}</span>
+            <span class="badge-ping">⚡ Aktif</span>
           </div>
         </div>
-        <span class="node-sub"></span>
+        <span class="blade-domain"></span>
       </div>
-      ${n.source === "local" ? '<button type="button" class="kill" aria-label="remove">×</button>' : ""}
+      ${n.source === "local" ? '<button type="button" class="blade-delete-btn" aria-label="Kaldır">×</button>' : ""}
     `;
 
-    li.querySelector(".node-title").textContent = n.name;
-    li.querySelector(".node-sub").textContent = n.domain;
+    li.querySelector(".blade-name").textContent = n.name;
+    li.querySelector(".blade-domain").textContent = n.domain;
 
     li.addEventListener("click", (ev) => {
-      if (ev.target.closest(".kill")) return;
+      if (ev.target.closest(".blade-delete-btn")) return;
       selected = n.id;
       paint();
     });
 
-    const kill = li.querySelector(".kill");
+    const kill = li.querySelector(".blade-delete-btn");
     if (kill) {
       kill.addEventListener("click", async (ev) => {
         ev.stopPropagation();
@@ -272,8 +283,8 @@ $("modeTun").addEventListener("click", () => setTun(true));
 $("modeProxy").addEventListener("click", () => setTun(false));
 
 $("protoAuto").addEventListener("click", () => { selectedProto = "auto"; paint(); });
-$("protoWs").addEventListener("click", () => { selectedProto = "ws"; paint(); });
 if ($("protoUpg")) $("protoUpg").addEventListener("click", () => { selectedProto = "upg"; paint(); });
+$("protoWs").addEventListener("click", () => { selectedProto = "ws"; paint(); });
 $("protoGrpc").addEventListener("click", () => { selectedProto = "grpc"; paint(); });
 
 const bBtn = $("launchBrowserBtn");
@@ -282,11 +293,11 @@ if (bBtn) {
     bBtn.textContent = "Açılıyor…";
     try {
       await window.aether.launchBrowser();
-      bBtn.textContent = "Tarayıcı Açıldı ✓";
+      bBtn.textContent = "Tarayıcı Başlatıldı ✓";
     } catch {
-      bBtn.textContent = "Açılamadı";
+      bBtn.textContent = "Başlatılamadı";
     }
-    setTimeout(() => { bBtn.textContent = "🚀 Chrome'u VPN ile Başlat"; }, 2000);
+    setTimeout(() => { bBtn.textContent = "🌐 Chrome'u Tünel ile Başlat"; }, 2000);
   });
 }
 

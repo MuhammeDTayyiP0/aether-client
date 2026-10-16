@@ -463,7 +463,7 @@ function stripAnsi(s) {
   return String(s || "").replace(/\u001b\[[0-9;]*[A-Za-z]/g, "").replace(/\s+/g, " ").trim();
 }
 
-function hardenTls(tlsObj, sni) {
+function hardenTls(tlsObj, sni, isGrpc) {
   const next = Object.assign({}, tlsObj || { enabled: true });
   next.enabled = true;
   next.insecure = true;
@@ -473,7 +473,11 @@ function hardenTls(tlsObj, sni) {
     enabled: true,
     fingerprint: "chrome",
   };
-  delete next.alpn;
+  if (isGrpc) {
+    next.alpn = ["h2"];
+  } else {
+    next.alpn = ["http/1.1"];
+  }
   delete next.disable_sni;
   return next;
 }
@@ -493,11 +497,12 @@ function migrateConfig(cfg) {
       .map(function (o) {
         const patched = Object.assign({}, o);
         delete patched.domain_resolver;
+        const isGrpc = Boolean(patched.transport && patched.transport.type === "grpc");
         if (patched.type === "vless") {
-          patched.tls = hardenTls(patched.tls, (patched.tls && patched.tls.server_name) || patched.server);
+          patched.tls = hardenTls(patched.tls, (patched.tls && patched.tls.server_name) || patched.server, isGrpc);
           if (!patched.network) patched.network = "tcp";
         } else if (patched.tls) {
-          patched.tls = hardenTls(patched.tls, (patched.tls && patched.tls.server_name) || patched.server);
+          patched.tls = hardenTls(patched.tls, (patched.tls && patched.tls.server_name) || patched.server, isGrpc);
         }
         return patched;
       });
@@ -521,10 +526,23 @@ function singboxFromVless(link) {
   const sni = q.get("sni") || host;
   
   let transportObj = {};
-  if (type === "grpc") {
+  const isGrpc = (type === "grpc");
+  if (isGrpc) {
     transportObj = {
       type: "grpc",
       service_name: q.get("serviceName") || "aether-grpc",
+      idle_timeout: "15s",
+      ping_timeout: "15s",
+      permit_without_stream: true,
+    };
+  } else if (type === "httpupgrade") {
+    const upgPath = decodeURIComponent(q.get("path") || "/");
+    const upgHost = q.get("host") || host;
+    transportObj = {
+      type: "httpupgrade",
+      host: upgHost,
+      path: upgPath,
+      headers: { Host: upgHost },
     };
   } else {
     const wsPath = decodeURIComponent(q.get("path") || "/");
@@ -544,7 +562,7 @@ function singboxFromVless(link) {
       outbounds: [{
         type: "vless", tag: "proxy", server: host, server_port: port, uuid: uuid,
         packet_encoding: "xudp",
-        tls: hardenTls({ enabled: true }, sni),
+        tls: hardenTls({ enabled: true }, sni, isGrpc),
         transport: transportObj,
       }],
     }),
@@ -640,30 +658,42 @@ async function startCore(id, protoOverride) {
   const cfg = migrateConfig(profile.config);
 
   // İstemciden protokol seçildiyse dinamik override yap:
-  if (protoOverride === "grpc") {
-    if (Array.isArray(cfg.outbounds)) {
-      cfg.outbounds.forEach(function (o) {
-        if (o && o.type === "vless") {
-          o.transport = {
-            type: "grpc",
-            service_name: "aether-grpc",
-          };
-        }
-      });
-    }
-  } else if (protoOverride === "ws") {
-    if (Array.isArray(cfg.outbounds)) {
-      cfg.outbounds.forEach(function (o) {
-        if (o && o.type === "vless") {
-          const hostDomain = o.server || "vpn.geldesat.com";
-          o.transport = {
-            type: "ws",
-            path: "/rasgelekrktr",
-            headers: { Host: hostDomain },
-          };
-        }
-      });
-    }
+  if (Array.isArray(cfg.outbounds)) {
+    cfg.outbounds.forEach(function (o) {
+      if (!o || o.type !== "vless") return;
+      const hostDomain = o.server || "vpn.geldesat.com";
+      const existingTrans = o.transport || {};
+      const currentPath = existingTrans.path || "/";
+
+      if (protoOverride === "grpc") {
+        const svc = existingTrans.service_name || "aether-grpc";
+        o.transport = {
+          type: "grpc",
+          service_name: svc,
+          idle_timeout: "15s",
+          ping_timeout: "15s",
+          permit_without_stream: true,
+        };
+        o.tls = hardenTls(o.tls, (o.tls && o.tls.server_name) || hostDomain, true);
+      } else if (protoOverride === "upg") {
+        const upgPath = currentPath.endsWith("-upg") ? currentPath : (currentPath.replace(/\/$/, "") + "-upg");
+        o.transport = {
+          type: "httpupgrade",
+          host: hostDomain,
+          path: upgPath,
+          headers: { Host: hostDomain },
+        };
+        o.tls = hardenTls(o.tls, (o.tls && o.tls.server_name) || hostDomain, false);
+      } else if (protoOverride === "ws") {
+        const wsPath = currentPath.replace(/-upg$/, "");
+        o.transport = {
+          type: "ws",
+          path: wsPath || "/",
+          headers: { Host: hostDomain },
+        };
+        o.tls = hardenTls(o.tls, (o.tls && o.tls.server_name) || hostDomain, false);
+      }
+    });
   }
 
   if (isTun) {

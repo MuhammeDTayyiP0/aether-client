@@ -2,11 +2,16 @@ name: Release
 
 on:
   push:
-    branches: [main, master]
+    branches:
+      - main
     paths-ignore:
       - "vlist/**"
       - "README.md"
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: write

@@ -38,11 +38,9 @@ body {
   padding-right: 148px;
   border-bottom: 1px solid var(--line);
   -webkit-app-region: drag;
-  app-region: drag;
 }
 .titlebar button {
   -webkit-app-region: no-drag;
-  app-region: no-drag;
 }
 .brand {
   display: flex;
@@ -155,6 +153,66 @@ body {
   background: transparent;
   color: var(--fg);
   box-shadow: inset 0 0 0 1px var(--line);
+}
+.modes {
+  display: flex;
+  background: #141416;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 3px;
+  gap: 3px;
+}
+.mode {
+  flex: 1;
+  height: 28px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.mode:hover {
+  color: var(--fg);
+}
+.mode.on {
+  background: #24252a;
+  color: var(--platinum);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.4);
+}
+.proto-modes {
+  background: #0f1012;
+}
+.mode-hint {
+  margin: -4px 0 2px;
+  font-size: 10px;
+  color: var(--muted);
+  text-align: center;
+}
+.browser-row {
+  display: flex;
+  justify-content: center;
+}
+.browser-btn {
+  height: 32px;
+  padding: 0 14px;
+  border: 1px solid rgba(59, 130, 246, 0.4);
+  border-radius: 8px;
+  background: rgba(59, 130, 246, 0.1);
+  color: #60a5fa;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.browser-btn:hover {
+  background: rgba(59, 130, 246, 0.2);
+  border-color: #60a5fa;
 }
 .steps {
   list-style: none;

@@ -208,15 +208,23 @@ function applySystemProxy() {
     execFileSync("gsettings", ["set", "org.gnome.system.proxy.https", "port", String(LOCAL_PORT)], { timeout: 2000 });
     execFileSync("gsettings", ["set", "org.gnome.system.proxy.socks", "host", "127.0.0.1"], { timeout: 2000 });
     execFileSync("gsettings", ["set", "org.gnome.system.proxy.socks", "port", String(LOCAL_PORT)], { timeout: 2000 });
+    execFileSync("gsettings", ["set", "org.gnome.system.proxy", "ignore-hosts", "['localhost', '127.0.0.0/8', '::1']"], { timeout: 2000 });
     proxyArmed = true;
   } catch {}
   try {
-    // 2. KDE Plasma
+    // 2. KDE Plasma (KDE 5 ve KDE 6)
     execFileSync("kwriteconfig5", ["--file", "kioslaverc", "--group", "Proxy Settings", "--key", "ProxyType", "1"], { timeout: 2000 });
     execFileSync("kwriteconfig5", ["--file", "kioslaverc", "--group", "Proxy Settings", "--key", "httpProxy", "http://127.0.0.1:" + LOCAL_PORT], { timeout: 2000 });
     execFileSync("kwriteconfig5", ["--file", "kioslaverc", "--group", "Proxy Settings", "--key", "httpsProxy", "http://127.0.0.1:" + LOCAL_PORT], { timeout: 2000 });
+    execFileSync("kwriteconfig6", ["--file", "kioslaverc", "--group", "Proxy Settings", "--key", "ProxyType", "1"], { timeout: 2000 });
+    execFileSync("kwriteconfig6", ["--file", "kioslaverc", "--group", "Proxy Settings", "--key", "httpProxy", "http://127.0.0.1:" + LOCAL_PORT], { timeout: 2000 });
+    execFileSync("kwriteconfig6", ["--file", "kioslaverc", "--group", "Proxy Settings", "--key", "httpsProxy", "http://127.0.0.1:" + LOCAL_PORT], { timeout: 2000 });
     proxyArmed = true;
   } catch {}
+  // Linux ortam değişkenleri (terminal ve arka plan uygulamaları için)
+  process.env.http_proxy = "http://127.0.0.1:" + LOCAL_PORT;
+  process.env.https_proxy = "http://127.0.0.1:" + LOCAL_PORT;
+  process.env.all_proxy = "socks5://127.0.0.1:" + LOCAL_PORT;
 }
 
 function clearSystemProxy() {
@@ -235,6 +243,10 @@ function clearSystemProxy() {
   if (!proxyArmed) return;
   try { execFileSync("gsettings", ["set", "org.gnome.system.proxy", "mode", "none"], { timeout: 2000 }); } catch {}
   try { execFileSync("kwriteconfig5", ["--file", "kioslaverc", "--group", "Proxy Settings", "--key", "ProxyType", "0"], { timeout: 2000 }); } catch {}
+  try { execFileSync("kwriteconfig6", ["--file", "kioslaverc", "--group", "Proxy Settings", "--key", "ProxyType", "0"], { timeout: 2000 }); } catch {}
+  delete process.env.http_proxy;
+  delete process.env.https_proxy;
+  delete process.env.all_proxy;
   proxyArmed = false;
 }
 
@@ -616,7 +628,7 @@ function addFromText(raw) {
   return store.profiles;
 }
 
-async function startCore(id) {
+async function startCore(id, protoOverride) {
   if (child) stopCore();
   const store = loadStore();
   const profile = store.profiles.find(function (p) { return p.id === id; });
@@ -626,6 +638,33 @@ async function startCore(id) {
   const cfgPath = path.join(app.getPath("userData"), "active.json");
   const isTun = Boolean(store.tunMode);
   const cfg = migrateConfig(profile.config);
+
+  // İstemciden protokol seçildiyse dinamik override yap:
+  if (protoOverride === "grpc") {
+    if (Array.isArray(cfg.outbounds)) {
+      cfg.outbounds.forEach(function (o) {
+        if (o && o.type === "vless") {
+          o.transport = {
+            type: "grpc",
+            service_name: "aether-grpc",
+          };
+        }
+      });
+    }
+  } else if (protoOverride === "ws") {
+    if (Array.isArray(cfg.outbounds)) {
+      cfg.outbounds.forEach(function (o) {
+        if (o && o.type === "vless") {
+          const hostDomain = o.server || "vpn.geldesat.com";
+          o.transport = {
+            type: "ws",
+            path: "/rasgelekrktr",
+            headers: { Host: hostDomain },
+          };
+        }
+      });
+    }
+  }
 
   if (isTun) {
     tunActive = true;
@@ -808,6 +847,28 @@ ipcMain.handle("remove-profile", function (_e, id) {
   saveStore(store);
   return store.profiles;
 });
-ipcMain.handle("connect", function (_e, id) { return startCore(id); });
+ipcMain.handle("connect", function (_e, id, proto) { return startCore(id, proto); });
 ipcMain.handle("disconnect", function () { stopCore(); return statusPayload(); });
+ipcMain.handle("launch-browser", function () {
+  const proxyArg = "--proxy-server=http://127.0.0.1:" + LOCAL_PORT;
+  if (process.platform === "linux") {
+    const candidates = ["google-chrome-stable", "google-chrome", "chromium-browser", "chromium", "brave-browser", "firefox"];
+    for (const b of candidates) {
+      try {
+        execFileSync("which", [b], { timeout: 1000 });
+        spawn(b, [proxyArg, "https://geldesat.com"], { detached: true, stdio: "ignore" }).unref();
+        return { ok: true, browser: b };
+      } catch {}
+    }
+    return { ok: false, error: "Tarayıcı bulunamadı" };
+  } else if (process.platform === "win32") {
+    try {
+      spawn("cmd.exe", ["/c", "start", "chrome", proxyArg, "https://geldesat.com"], { detached: true, stdio: "ignore" }).unref();
+      return { ok: true };
+    } catch {
+      return { ok: false };
+    }
+  }
+  return { ok: false };
+});
 ipcMain.handle("refresh-vlist", function () { return pullVlist(); });

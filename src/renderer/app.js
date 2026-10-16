@@ -50,6 +50,7 @@ let running = false;
 let busy = false;
 let exitIp = "";
 let tunMode = false;
+let selectedProto = "auto";
 
 const $ = (id) => document.getElementById(id);
 function t(key) {
@@ -69,6 +70,22 @@ function paint() {
   $("modeHint").textContent = tunMode ? L.tunOn : L.tunOff;
   $("modeTun").classList.toggle("on", tunMode);
   $("modeProxy").classList.toggle("on", !tunMode);
+
+  $("protoAuto").classList.toggle("on", selectedProto === "auto");
+  $("protoGrpc").classList.toggle("on", selectedProto === "grpc");
+  $("protoWs").classList.toggle("on", selectedProto === "ws");
+
+  if (selectedProto === "grpc") {
+    $("protoHint").textContent = "Protokol: gRPC (HTTP/2 — MEB & Mobil En Hızlı)";
+  } else if (selectedProto === "ws") {
+    $("protoHint").textContent = "Protokol: WebSocket (Standart tünel)";
+  } else {
+    $("protoHint").textContent = "Protokol: Otomatik (Düğüm varsayılanı)";
+  }
+
+  const browserRow = $("browserRow");
+  if (browserRow) browserRow.hidden = !running;
+
   $("proxyHint").textContent = running && exitIp ? ((tunMode ? "TUN · çıkış " : "çıkış ") + exitIp) : L.proxy;
   const p = selectedProfile();
   $("nodeName").textContent = p ? p.name : L.pick;
@@ -198,6 +215,25 @@ async function setTun(on) {
 }
 $("modeTun").addEventListener("click", () => setTun(true));
 $("modeProxy").addEventListener("click", () => setTun(false));
+
+$("protoAuto").addEventListener("click", () => { selectedProto = "auto"; paint(); });
+$("protoGrpc").addEventListener("click", () => { selectedProto = "grpc"; paint(); });
+$("protoWs").addEventListener("click", () => { selectedProto = "ws"; paint(); });
+
+const bBtn = $("launchBrowserBtn");
+if (bBtn) {
+  bBtn.addEventListener("click", async () => {
+    bBtn.textContent = "Açılıyor…";
+    try {
+      await window.aether.launchBrowser();
+      bBtn.textContent = "Tarayıcı Açıldı ✓";
+    } catch {
+      bBtn.textContent = "Açılamadı";
+    }
+    setTimeout(() => { bBtn.textContent = "🌐 Tarayıcıyı VPN ile Başlat"; }, 2000);
+  });
+}
+
 $("lang").addEventListener("click", async () => {
   locale = locale === "tr" ? "en" : "tr";
   await window.aether.setLocale(locale);
@@ -254,7 +290,7 @@ async function toggle() {
   paint();
   runSteps();
   try {
-    await window.aether.connect(p.id);
+    await window.aether.connect(p.id, selectedProto);
     running = true;
   } catch (e) {
     $("err").hidden = false;

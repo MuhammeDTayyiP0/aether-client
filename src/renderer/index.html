@@ -12,28 +12,20 @@
   </head>
   <body>
     <div class="shell">
-      <!-- Ambient Lighting Nebulas -->
-      <div class="ambient-glow ambient-top" id="ambientTop"></div>
-      <div class="ambient-glow ambient-bottom" id="ambientBottom"></div>
+      <div id="ambientTop" hidden></div>
+      <div id="ambientBottom" hidden></div>
 
-      <!-- Luxury Titlebar -->
+      <!-- Clean Minimal Titlebar -->
       <header class="titlebar">
         <div class="brand">
           <div class="brand-crest">
-            <svg class="crest-svg" viewBox="0 0 24 24" fill="none">
-              <path d="M12 2L3 7V12C3 17.5 7 21.5 12 22C17 21.5 21 17.5 21 12V7L12 2Z" stroke="url(#crestGrad)" stroke-width="1.8" />
-              <circle cx="12" cy="12" r="3" fill="#38bdf8" />
-              <defs>
-                <linearGradient id="crestGrad" x1="3" y1="2" x2="21" y2="22">
-                  <stop stop-color="#38bdf8" />
-                  <stop offset="1" stop-color="#10b981" />
-                </linearGradient>
-              </defs>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 2L3 7v6c0 5.5 3.8 10.7 9 12 5.2-1.3 9-6.5 9-12V7l-9-5z" />
             </svg>
           </div>
           <div class="brand-meta">
             <span class="brand-name">AETHER</span>
-            <span class="brand-tag">QUANTUM SHIELD</span>
+            <span class="brand-tag">SHIELD</span>
           </div>
         </div>
 
@@ -48,27 +40,14 @@
 
       <!-- Main Stage -->
       <main class="main">
-        <!-- Holographic Core Stage -->
+        <!-- Flat Minimalist Core Stage -->
         <section class="core-stage">
-          <div class="dial-container">
-            <!-- Pulsing Radar / Aura Rings -->
-            <div class="radar-aura" id="radarAura"></div>
-            <div class="radar-ring radar-ring-outer"></div>
-            <div class="radar-ring radar-ring-mid"></div>
-
-            <!-- Interactive Power Dial -->
-            <button type="button" class="power-dial" id="ring" data-state="down" aria-label="Bağlantıyı Başlat">
-              <div class="dial-bevel">
-                <div class="dial-lens">
-                  <div class="dial-sheen"></div>
-                  <div class="dial-icon-wrap">
-                    <svg class="dial-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                      <path class="svg-orbit" d="M12 3a9 9 0 0 0-9 9c0 3.6 2.1 6.7 5.2 8.1M12 3a9 9 0 0 1 9 9c0 3.6-2.1 6.7-5.2 8.1" stroke-width="1.8" stroke-linecap="round" />
-                      <line class="svg-pin" x1="12" y1="2" x2="12" y2="12" stroke-width="2.2" stroke-linecap="round" />
-                    </svg>
-                  </div>
-                </div>
-              </div>
+          <div class="power-dock">
+            <button type="button" class="power-btn" id="ring" data-state="down" aria-label="Bağlantı Anahtarı">
+              <svg class="power-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M18.36 6.64a9 9 0 1 1-12.73 0" />
+                <line x1="12" y1="2" x2="12" y2="12" />
+              </svg>
             </button>
           </div>
 
@@ -82,20 +61,20 @@
               <span class="node-display" id="nodeName">Sunucu Seçilmedi</span>
             </div>
 
-            <!-- Live Telemetry Bar -->
+            <!-- Flat Telemetry Bar -->
             <div class="telemetry-bar" id="telemetryBar">
               <div class="telemetry-item" id="ipBadge" title="Aktif Dış IP">
-                <span class="t-icon">🌐</span>
+                <span class="t-icon">IP</span>
                 <span class="t-val" id="ipValue">127.0.0.1</span>
               </div>
               <div class="telemetry-sep"></div>
               <div class="telemetry-item" title="Tünel Gecikmesi">
-                <span class="t-icon">⚡</span>
+                <span class="t-icon">PING</span>
                 <span class="t-val" id="pingValue">Ultra Hızlı</span>
               </div>
               <div class="telemetry-sep"></div>
-              <div class="telemetry-item" title="Güvenlik">
-                <span class="t-icon">🛡️</span>
+              <div class="telemetry-item" title="Güvenlik Modu">
+                <span class="t-icon">SEC</span>
                 <span class="t-val">TLS 1.3</span>
               </div>
             </div>
@@ -105,9 +84,7 @@
         <!-- Master Action Button -->
         <div class="action-dock">
           <button type="button" class="master-btn" id="go">
-            <span class="btn-flare"></span>
             <span class="btn-text" id="goText">Bağlantıyı Başlat</span>
-            <span class="btn-arrow">→</span>
           </button>
         </div>
 
@@ -121,11 +98,9 @@
             </div>
             <div class="cockpit-segmented">
               <button type="button" class="cockpit-tab on" id="modeProxy">
-                <span class="tab-icon">⚡</span>
                 <span>Proxy</span>
               </button>
               <button type="button" class="cockpit-tab" id="modeTun">
-                <span class="tab-icon">🛡️</span>
                 <span>TUN</span>
               </button>
             </div>
@@ -139,7 +114,7 @@
             </div>
             <div class="cockpit-segmented proto-segmented">
               <button type="button" class="cockpit-tab on" id="protoAuto" data-proto="auto" title="Otomatik Tünel">Oto</button>
-              <button type="button" class="cockpit-tab" id="protoUpg" data-proto="upg" title="HTTPUpgrade - MEB & CDN En Hızlı">UPG</button>
+              <button type="button" class="cockpit-tab" id="protoUpg" data-proto="upg" title="HTTPUpgrade - MEB & CDN Hızlı">UPG</button>
               <button type="button" class="cockpit-tab" id="protoWs" data-proto="ws" title="WebSocket - Standart">WS</button>
               <button type="button" class="cockpit-tab" id="protoGrpc" data-proto="grpc" title="gRPC - HTTP/2 Akış">gRPC</button>
             </div>
@@ -151,7 +126,7 @@
           <button type="button" class="chrome-launch-btn" id="launchBrowserBtn">
             <span class="launch-icon">🌐</span>
             <span>Chrome'u Tünel ile Başlat</span>
-            <span class="launch-tag">İzole Profil</span>
+            <span class="launch-tag">İzole</span>
           </button>
         </div>
 
@@ -160,13 +135,13 @@
 
         <!-- Error Notification Toast -->
         <div class="alert-toast" id="errBox" hidden>
-          <div class="alert-icon">⚠️</div>
+          <div class="alert-icon">!</div>
           <div class="alert-content">
             <p class="err-text" id="err"></p>
           </div>
         </div>
 
-        <!-- Server Blade Deck -->
+        <!-- Server List Section -->
         <section class="blade-section">
           <div class="blade-header">
             <div class="blade-headline">
@@ -176,7 +151,7 @@
             <div class="blade-actions">
               <span class="hub-url" id="fetchHint">vlist.geldesat.com</span>
               <button type="button" class="blade-refresh-btn" id="reload" title="Düğümleri Güncelle">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2" />
                 </svg>
               </button>
@@ -201,14 +176,14 @@
         </section>
       </main>
 
-      <!-- Luxury Footer -->
+      <!-- Clean Flat Footer -->
       <footer class="footbar">
         <div class="footbar-left">
           <span class="port-indicator"></span>
           <span id="proxyHint" class="port-label">Proxy: 127.0.0.1:17890</span>
         </div>
         <div class="footbar-right">
-          <span class="edition-tag">Aether Ultra</span>
+          <span class="edition-tag">Aether</span>
           <span class="version-tag">v1.2</span>
         </div>
       </footer>

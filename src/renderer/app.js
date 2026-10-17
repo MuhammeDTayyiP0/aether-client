@@ -88,7 +88,9 @@ function paint() {
   const browserRow = $("browserRow");
   if (browserRow) browserRow.hidden = !running;
 
-  $("proxyHint").textContent = running && exitIp ? ((tunMode ? "TUN · " : "Proxy · ") + exitIp) : L.proxy;
+  if ($("proxyHint")) {
+    $("proxyHint").textContent = running && exitIp ? ((tunMode ? "TUN · " : "Proxy · ") + exitIp) : L.proxy;
+  }
 
   const ipVal = $("ipValue");
   const pingVal = $("pingValue");

@@ -474,7 +474,7 @@ function hardenTls(tlsObj, sni, isGrpc) {
     fingerprint: "chrome",
   };
   if (isGrpc) {
-    next.alpn = ["h2"];
+    next.alpn = ["h2", "http/1.1"];
   } else {
     next.alpn = ["http/1.1"];
   }
@@ -487,8 +487,7 @@ function migrateConfig(cfg) {
   const next = JSON.parse(JSON.stringify(cfg));
   next.log = { level: "warn", timestamp: true };
   next.dns = {
-    servers: [{ type: "local", tag: "local" }],
-    final: "local",
+    servers: [{ address: "local", tag: "local" }],
     strategy: "ipv4_only",
   };
   if (Array.isArray(next.outbounds)) {

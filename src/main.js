@@ -37,14 +37,14 @@ const insecureAgent = new https.Agent({
 });
 
 const VLIST_URLS = [
+  "https://vpn.geldesat.com/list.json",
+  "https://vpn.geldesat.com/sub/admin?format=json",
   "https://vlist.geldesat.com/list.json",
   "http://vlist.geldesat.com/list.json",
-  "https://vlist.geldesat.com/list.txt",
-  "https://vlist.geldesat.com/",
 ];
 
 const FALLBACK_VLESS =
-  "vless://a34d5014-2895-46ce-96c3-5b872a4a79fe@vpn.geldesat.com:443?encryption=none&security=tls&sni=vpn.geldesat.com&type=ws&host=vpn.geldesat.com&path=%2Frasgelekrktr#Aether";
+  "vless://a34d5014-2895-46ce-96c3-5b872a4a79fe@vpn.geldesat.com:443?encryption=none&security=tls&sni=vpn.geldesat.com&fp=chrome&type=httpupgrade&host=vpn.geldesat.com&path=%2Faether-upg#Aether%20(HTTPUpgrade)";
 
 let win = null;
 let tray = null;
@@ -518,8 +518,7 @@ function migrateConfig(cfg) {
         outbound: "direct"
       }
     ],
-    final: "proxy",
-    default_domain_resolver: "local"
+    final: "proxy"
   };
   if (!next.outbounds.some(function (o) { return o.tag === "direct"; })) {
     next.outbounds.push({ type: "direct", tag: "direct" });
@@ -722,14 +721,37 @@ function itemToProfile(item, i) {
 }
 
 function parseVlist(text) {
-  const t = String(text || "").trim();
+  let t = String(text || "").trim();
   if (!t) throw new Error("liste bos");
-  if (t.indexOf("vless://") === 0 || t.indexOf("trojan://") === 0 || t.indexOf("vmess://") === 0) {
-    return t.split(/\r?\n/).map(function (l) { return l.trim(); }).filter(function (l) { return (l.indexOf("vless://") === 0 || l.indexOf("trojan://") === 0 || l.indexOf("vmess://") === 0) && l.indexOf("#") !== 0; });
+
+  // Base64 abonelik formatı ise decode et (/sub/:token çıktısı)
+  if (!t.startsWith("{") && !t.startsWith("[") && !t.includes("://")) {
+    try {
+      const decoded = Buffer.from(t, "base64").toString("utf8");
+      if (decoded.includes("://")) {
+        t = decoded.trim();
+      }
+    } catch {}
   }
+
+  // Satır satır URL listesi (vless://, trojan://, vmess://)
+  if (t.indexOf("vless://") === 0 || t.indexOf("trojan://") === 0 || t.indexOf("vmess://") === 0) {
+    return t.split(/\r?\n/).map(function (l) { return l.trim(); }).filter(function (l) {
+      return (l.indexOf("vless://") === 0 || l.indexOf("trojan://") === 0 || l.indexOf("vmess://") === 0) && l.indexOf("#") !== 0;
+    });
+  }
+
+  // JSON formatı
   const j = JSON.parse(t);
   if (Array.isArray(j)) return j;
   if (j.nodes) return j.nodes;
+  if (j.links && Array.isArray(j.links)) {
+    return j.links.map(function (link) {
+      if (link.indexOf("trojan://") === 0) return { trojan: link };
+      if (link.indexOf("vmess://") === 0) return { vmess: link };
+      return { vless: link };
+    });
+  }
   if (j.vless || j.trojan || j.vmess || j.config) return [j];
   throw new Error("list.json bicimi hatali");
 }
@@ -765,30 +787,44 @@ async function addFromText(raw) {
   if (!text) throw new Error("Bos");
   const store = loadStore();
 
-  // Abonelik URL'si eklendiyse (örn: https://vpn.geldesat.com/sub/admin)
+  // 1. Abonelik URL'si eklendiyse (örn: https://vpn.geldesat.com/sub/admin veya list.json)
   if (text.indexOf("http://") === 0 || text.indexOf("https://") === 0) {
     const rawFetched = await fetchText(text);
-    let decoded = rawFetched;
-    try {
-      decoded = Buffer.from(rawFetched.trim(), "base64").toString("utf8");
-    } catch {}
-    const lines = decoded.split(/\r?\n/).map(function (l) { return l.trim(); }).filter(Boolean);
-    let count = 0;
-    lines.forEach(function (l) {
-      try {
-        let p;
-        if (l.indexOf("vless://") === 0) p = singboxFromVless(l);
-        else if (l.indexOf("trojan://") === 0) p = singboxFromTrojan(l);
-        else if (l.indexOf("vmess://") === 0) p = singboxFromVmess(l);
-        if (p) {
-          store.profiles.push({ id: "sub-" + Date.now() + "-" + (count++), name: p.name, domain: p.domain, config: p.config, source: "local" });
-        }
-      } catch {}
+    const parsedItems = parseVlist(rawFetched);
+    const newProfiles = parsedItems.map(function (it, idx) {
+      const prof = itemToProfile(it, idx);
+      prof.id = "sub-" + Date.now() + "-" + idx;
+      prof.source = "local";
+      return prof;
     });
+    if (!newProfiles.length) throw new Error("Abonelikte aktif profil bulunamadı");
+    store.profiles = (store.profiles || []).concat(newProfiles);
     saveStore(store);
     return store.profiles;
   }
 
+  // 2. Token veya sub/token girildiyse (örn: "admin" veya "sub/admin")
+  if (!text.includes("://") && !text.startsWith("{") && !text.includes("\n") && text.length < 64) {
+    const cleanToken = text.replace(/^sub\//, "").trim();
+    try {
+      const tokenUrl = "https://vpn.geldesat.com/sub/" + encodeURIComponent(cleanToken) + "?format=json";
+      const rawFetched = await fetchText(tokenUrl);
+      const parsedItems = parseVlist(rawFetched);
+      const newProfiles = parsedItems.map(function (it, idx) {
+        const prof = itemToProfile(it, idx);
+        prof.id = "sub-" + Date.now() + "-" + idx;
+        prof.source = "local";
+        return prof;
+      });
+      if (newProfiles.length) {
+        store.profiles = (store.profiles || []).concat(newProfiles);
+        saveStore(store);
+        return store.profiles;
+      }
+    } catch {}
+  }
+
+  // 3. Tekil protokol URI veya JSON yapılandırması
   let profile;
   if (text.indexOf("vless://") === 0) {
     const parsed = singboxFromVless(text);
@@ -823,13 +859,15 @@ async function startCore(id, protoOverride) {
   // İstemciden protokol seçildiyse dinamik override yap:
   if (Array.isArray(cfg.outbounds)) {
     cfg.outbounds.forEach(function (o) {
-      if (!o || o.type !== "vless") return;
+      if (!o || (o.type !== "vless" && o.type !== "trojan" && o.type !== "vmess")) return;
       const hostDomain = o.server || "vpn.geldesat.com";
       const existingTrans = o.transport || {};
       const currentPath = existingTrans.path || "/";
 
       if (protoOverride === "grpc") {
-        const svc = existingTrans.service_name || "aether-grpc";
+        let svc = existingTrans.service_name || "aether-grpc";
+        if (o.type === "trojan" && !svc.endsWith("-trpc")) svc += "-trpc";
+        if (o.type === "vmess" && !svc.endsWith("-vmpc")) svc += "-vmpc";
         o.transport = {
           type: "grpc",
           service_name: svc,
@@ -839,7 +877,11 @@ async function startCore(id, protoOverride) {
         };
         o.tls = hardenTls(o.tls, (o.tls && o.tls.server_name) || hostDomain, true);
       } else if (protoOverride === "upg") {
-        const upgPath = currentPath.endsWith("-upg") ? currentPath : (currentPath.replace(/\/$/, "") + "-upg");
+        let upgPath = currentPath;
+        if (o.type === "trojan") upgPath = "/aether-trup";
+        else if (o.type === "vmess") upgPath = "/aether-vmup";
+        else upgPath = currentPath.endsWith("-upg") ? currentPath : (currentPath.replace(/\/$/, "") + "-upg");
+
         o.transport = {
           type: "httpupgrade",
           host: hostDomain,
@@ -848,7 +890,11 @@ async function startCore(id, protoOverride) {
         };
         o.tls = hardenTls(o.tls, (o.tls && o.tls.server_name) || hostDomain, false);
       } else if (protoOverride === "ws") {
-        const wsPath = currentPath.replace(/-upg$/, "");
+        let wsPath = "/aether";
+        if (o.type === "trojan") wsPath = "/aether-trws";
+        else if (o.type === "vmess") wsPath = "/aether-vmess";
+        else wsPath = currentPath.replace(/-upg$/, "");
+
         o.transport = {
           type: "ws",
           path: wsPath || "/",
@@ -866,7 +912,7 @@ async function startCore(id, protoOverride) {
         type: "tun",
         tag: "tun-in",
         interface_name: "aether-tun",
-        inet4_address: "172.19.0.1/30",
+        address: ["172.19.0.1/30"],
         auto_route: true,
         strict_route: false,
         stack: "system",

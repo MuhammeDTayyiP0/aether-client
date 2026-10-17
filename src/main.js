@@ -540,9 +540,18 @@ function singboxFromTrojan(link) {
   const name = decodeURIComponent(u.hash.replace(/^#/, "")) || (host + " (Trojan)");
   const type = (q.get("type") || "ws").toLowerCase();
   const sni = q.get("sni") || host;
+  const isGrpc = (type === "grpc");
 
   let transportObj = {};
-  if (type === "httpupgrade") {
+  if (isGrpc) {
+    transportObj = {
+      type: "grpc",
+      service_name: q.get("serviceName") || "aether-grpc-trpc",
+      idle_timeout: "15s",
+      ping_timeout: "15s",
+      permit_without_stream: true,
+    };
+  } else if (type === "httpupgrade") {
     transportObj = {
       type: "httpupgrade",
       host: q.get("host") || host,
@@ -563,7 +572,63 @@ function singboxFromTrojan(link) {
       inbounds: [{ type: "mixed", tag: "mixed-in", listen: "127.0.0.1", listen_port: LOCAL_PORT }],
       outbounds: [{
         type: "trojan", tag: "proxy", server: host, server_port: port, password: pass,
-        tls: hardenTls({ enabled: true }, sni, false),
+        tls: hardenTls({ enabled: true }, sni, isGrpc),
+        transport: transportObj,
+      }],
+    }),
+  };
+}
+
+function singboxFromVmess(link) {
+  const raw = link.trim().replace(/^vmess:\/\//i, "");
+  const jsonStr = Buffer.from(raw, "base64").toString("utf8");
+  const d = JSON.parse(jsonStr);
+
+  const host = d.add;
+  const port = Number(d.port || 443);
+  const uuid = d.id;
+  const net = (d.net || "ws").toLowerCase();
+  const sni = d.sni || host;
+  const name = d.ps || (host + " (VMess)");
+  const isGrpc = (net === "grpc");
+
+  let transportObj = {};
+  if (isGrpc) {
+    transportObj = {
+      type: "grpc",
+      service_name: d.path || "aether-grpc-vmpc",
+      idle_timeout: "15s",
+      ping_timeout: "15s",
+      permit_without_stream: true,
+    };
+  } else if (net === "httpupgrade") {
+    transportObj = {
+      type: "httpupgrade",
+      host: d.host || host,
+      path: d.path || "/",
+    };
+  } else {
+    transportObj = {
+      type: "ws",
+      path: d.path || "/",
+      headers: { Host: d.host || host },
+    };
+  }
+
+  return {
+    name: name,
+    domain: host,
+    config: migrateConfig({
+      inbounds: [{ type: "mixed", tag: "mixed-in", listen: "127.0.0.1", listen_port: LOCAL_PORT }],
+      outbounds: [{
+        type: "vmess",
+        tag: "proxy",
+        server: host,
+        server_port: port,
+        uuid: uuid,
+        security: d.scy || "auto",
+        alter_id: Number(d.aid || 0),
+        tls: hardenTls({ enabled: Boolean(d.tls) }, sni, isGrpc),
         transport: transportObj,
       }],
     }),
@@ -632,7 +697,10 @@ function domainFromConfig(cfg) {
 
 function itemToProfile(item, i) {
   if (typeof item === "string") {
-    const parsed = item.indexOf("trojan://") === 0 ? singboxFromTrojan(item) : singboxFromVless(item);
+    let parsed;
+    if (item.indexOf("trojan://") === 0) parsed = singboxFromTrojan(item);
+    else if (item.indexOf("vmess://") === 0) parsed = singboxFromVmess(item);
+    else parsed = singboxFromVless(item);
     return { id: "remote-" + i + "-" + parsed.domain, name: parsed.name, domain: parsed.domain, config: parsed.config, source: "remote" };
   }
   if (item && item.vless) {
@@ -641,6 +709,10 @@ function itemToProfile(item, i) {
   }
   if (item && item.trojan) {
     const parsed = singboxFromTrojan(item.trojan);
+    return { id: "remote-" + i + "-" + parsed.domain, name: item.name || parsed.name, domain: parsed.domain, config: parsed.config, source: "remote" };
+  }
+  if (item && item.vmess) {
+    const parsed = singboxFromVmess(item.vmess);
     return { id: "remote-" + i + "-" + parsed.domain, name: item.name || parsed.name, domain: parsed.domain, config: parsed.config, source: "remote" };
   }
   if (item && item.config && item.config.outbounds) {
@@ -652,13 +724,13 @@ function itemToProfile(item, i) {
 function parseVlist(text) {
   const t = String(text || "").trim();
   if (!t) throw new Error("liste bos");
-  if (t.indexOf("vless://") === 0 || t.indexOf("trojan://") === 0) {
-    return t.split(/\r?\n/).map(function (l) { return l.trim(); }).filter(function (l) { return (l.indexOf("vless://") === 0 || l.indexOf("trojan://") === 0) && l.indexOf("#") !== 0; });
+  if (t.indexOf("vless://") === 0 || t.indexOf("trojan://") === 0 || t.indexOf("vmess://") === 0) {
+    return t.split(/\r?\n/).map(function (l) { return l.trim(); }).filter(function (l) { return (l.indexOf("vless://") === 0 || l.indexOf("trojan://") === 0 || l.indexOf("vmess://") === 0) && l.indexOf("#") !== 0; });
   }
   const j = JSON.parse(t);
   if (Array.isArray(j)) return j;
   if (j.nodes) return j.nodes;
-  if (j.vless || j.trojan || j.config) return [j];
+  if (j.vless || j.trojan || j.vmess || j.config) return [j];
   throw new Error("list.json bicimi hatali");
 }
 
@@ -707,6 +779,7 @@ async function addFromText(raw) {
         let p;
         if (l.indexOf("vless://") === 0) p = singboxFromVless(l);
         else if (l.indexOf("trojan://") === 0) p = singboxFromTrojan(l);
+        else if (l.indexOf("vmess://") === 0) p = singboxFromVmess(l);
         if (p) {
           store.profiles.push({ id: "sub-" + Date.now() + "-" + (count++), name: p.name, domain: p.domain, config: p.config, source: "local" });
         }
@@ -722,6 +795,9 @@ async function addFromText(raw) {
     profile = { id: "local-" + Date.now(), name: parsed.name, domain: parsed.domain, config: parsed.config, source: "local" };
   } else if (text.indexOf("trojan://") === 0) {
     const parsed = singboxFromTrojan(text);
+    profile = { id: "local-" + Date.now(), name: parsed.name, domain: parsed.domain, config: parsed.config, source: "local" };
+  } else if (text.indexOf("vmess://") === 0) {
+    const parsed = singboxFromVmess(text);
     profile = { id: "local-" + Date.now(), name: parsed.name, domain: parsed.domain, config: parsed.config, source: "local" };
   } else {
     const cfg = JSON.parse(text);

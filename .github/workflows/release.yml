@@ -20,6 +20,8 @@ env:
   # Cekirdek surumu sabit: config bicimi bu surume gore yazildi (src/links.js).
   # Yukseltirken once yerelde "npm test" ve sing-box check ile dogrulayin.
   SING_BOX_VERSION: "1.14.2"
+  # XHTTP hatlari icin ikinci cekirdek (sing-box XHTTP desteklemez)
+  XRAY_VERSION: "26.9.9"
   NODE_VERSION: "22"
 
 jobs:
@@ -41,6 +43,9 @@ jobs:
           tar -xzf linux.tgz
           cp "sing-box-${VER}-linux-amd64/sing-box" resources/bin/linux/aether-core
           chmod +x resources/bin/linux/aether-core
+          curl -fsSL -o xray.zip "https://github.com/XTLS/Xray-core/releases/download/v${XRAY_VERSION}/Xray-linux-64.zip"
+          unzip -o -j xray.zip xray -d xray-tmp
+          install -m 755 xray-tmp/xray resources/bin/linux/aether-xray
           python3 packaging/make_icon.py build/icon.png
       - name: Check generated configs with core
         run: |
@@ -49,10 +54,18 @@ jobs:
             const fs = require("fs"); const L = require("./src/links");
             const link = "vless://00000000-0000-4000-8000-000000000000@vpn.example.com:443?type=httpupgrade&host=vpn.example.com&path=%2Fp-upg&security=tls&sni=vpn.example.com&alpn=http%2F1.1#t";
             const [p] = L.parseSubscription(link);
-            for (const tun of [false, true]) for (const insecure of [false, true])
-              fs.writeFileSync(`cfg-${tun}-${insecure}.json`, JSON.stringify(L.buildCoreConfig(p.outbound, { tun, insecure, uplink: tun ? null : { server: "10.0.0.1", server_port: 8080 }, localPort: 17890 })));
+            const xh = "vless://00000000-0000-4000-8000-000000000000@vpn.example.com:443?type=xhttp&host=vpn.example.com&path=%2Fp-xh&mode=packet-up&security=tls&sni=vpn.example.com#x";
+            const [px] = L.parseSubscription(xh);
+            for (const tun of [false, true]) for (const insecure of [false, true]) {
+              const opts = { tun, insecure, uplink: tun ? null : { server: "10.0.0.1", server_port: 8080 }, localPort: 17890, xrayPort: 17891, xrayProcess: "aether-xray" };
+              fs.writeFileSync(`cfg-${tun}-${insecure}.json`, JSON.stringify(L.buildCoreConfig(p.outbound, opts)));
+              fs.writeFileSync(`cfg-xh-${tun}-${insecure}.json`, JSON.stringify(L.buildCoreConfig(px.outbound, opts)));
+            }
+            fs.writeFileSync("xray-pin.json", JSON.stringify(L.buildXrayConfig(px.outbound, { pins: ["1dfc1605fbad358d8bc844f76d15203fac9ca5c1a79fd4857ffaf2864fbebf96"], uplink: { server: "10.0.0.1", server_port: 8080 }, socksPort: 17891 })));
+            fs.writeFileSync("xray-plain.json", JSON.stringify(L.buildXrayConfig(px.outbound, { pins: [], uplink: null, socksPort: 17891 })));
           '
           for f in cfg-*.json; do resources/bin/linux/aether-core check -c "$f"; done
+          for f in xray-*.json; do resources/bin/linux/aether-xray run -test -c "$f"; done
       - name: Build deb + tar.gz
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
@@ -113,6 +126,9 @@ jobs:
           curl -fsSL -o win.zip "https://github.com/SagerNet/sing-box/releases/download/v${VER}/sing-box-${VER}-windows-amd64.zip"
           unzip -j win.zip "*/sing-box.exe" -d resources/bin/win
           mv resources/bin/win/sing-box.exe resources/bin/win/aether-core.exe
+          curl -fsSL -o xray.zip "https://github.com/XTLS/Xray-core/releases/download/v${XRAY_VERSION}/Xray-windows-64.zip"
+          unzip -o -j xray.zip xray.exe -d resources/bin/win
+          mv resources/bin/win/xray.exe resources/bin/win/aether-xray.exe
           curl -fsSL -A "Mozilla/5.0" -o wintun.zip https://www.wintun.net/builds/wintun-0.14.1.zip
           python packaging/fetch_wintun.py wintun.zip resources/bin/win/wintun.dll
           python packaging/make_icon.py build/icon.png

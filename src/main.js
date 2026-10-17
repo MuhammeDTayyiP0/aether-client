@@ -18,7 +18,9 @@ const { spawn, execFileSync } = require("child_process");
 const {
   LINK_SCHEMES,
   buildCoreConfig,
+  buildXrayConfig,
   makeProfile,
+  needsXray,
   normalizeSubscription,
   parseIp,
   parseLink,
@@ -28,6 +30,8 @@ const {
 } = require("./links");
 
 const LOCAL_PORT = 17890;
+// XHTTP hatlarinda sing-box trafigi bu yerel SOCKS portundan Xray'e verir.
+const XRAY_PORT = 17891;
 const DEFAULT_SERVER = "vpn.geldesat.com";
 // Ana alan adi engellenirse abonelik bu aynalardan da denenir (vlist/ nginx /sub/ proxy'si).
 const SUB_MIRRORS = ["vlist.geldesat.com"];
@@ -35,6 +39,7 @@ const SUB_MIRRORS = ["vlist.geldesat.com"];
 let win = null;
 let tray = null;
 let child = null;
+let xrayChild = null;
 let activeId = null;
 let lastExitIp = "";
 let lastLatencyMs = 0;
@@ -53,6 +58,7 @@ function dataPath(name) {
 }
 const storePath = () => dataPath("profiles.json");
 const pidPath = () => dataPath("core.pid");
+const xrayPidPath = () => dataPath("xray.pid");
 const proxyPrevPath = () => dataPath("proxy-prev.json");
 
 function iconFile() {
@@ -108,11 +114,15 @@ function migrateStore(s) {
   return store;
 }
 
-function corePath() {
-  const name = process.platform === "win32" ? "aether-core.exe" : "aether-core";
+function binPath(base) {
+  const name = process.platform === "win32" ? `${base}.exe` : base;
   if (app.isPackaged) return path.join(process.resourcesPath, "bin", name);
-  return path.join(__dirname, "..", "resources", "bin", name);
+  // Gelistirme: electron-builder'in extraResources kaynagi resources/bin/<win|linux|mac>
+  const osDir = { win32: "win", darwin: "mac" }[process.platform] || "linux";
+  return path.join(__dirname, "..", "resources", "bin", osDir, name);
 }
+const corePath = () => binPath("aether-core");
+const xrayPath = () => binPath("aether-xray");
 
 // ---------------------------------------------------------------------------
 // Durum / IPC yardimcilari
@@ -183,11 +193,13 @@ function killPid(pid) {
 }
 
 function killStale() {
-  try {
-    const pid = parseInt(fs.readFileSync(pidPath(), "utf8"), 10);
-    if (pid && pid !== process.pid) killPid(pid);
-  } catch { /* pid dosyasi yok */ }
-  try { fs.unlinkSync(pidPath()); } catch { /* yok */ }
+  for (const file of [pidPath(), xrayPidPath()]) {
+    try {
+      const pid = parseInt(fs.readFileSync(file, "utf8"), 10);
+      if (pid && pid !== process.pid) killPid(pid);
+    } catch { /* pid dosyasi yok */ }
+    try { fs.unlinkSync(file); } catch { /* yok */ }
+  }
 }
 
 function stopCore() {
@@ -199,7 +211,11 @@ function stopCore() {
   lastLatencyMs = 0;
   tunActive = false;
   if (proc && proc.pid) killPid(proc.pid);
+  const xproc = xrayChild;
+  xrayChild = null;
+  if (xproc && xproc.pid) killPid(xproc.pid);
   try { fs.unlinkSync(pidPath()); } catch { /* yok */ }
+  try { fs.unlinkSync(xrayPidPath()); } catch { /* yok */ }
   clearSystemProxy();
   send("status", statusPayload());
 }
@@ -654,11 +670,11 @@ function probeViaProxy() {
     .catch(() => probeOne("http://checkip.amazonaws.com/"));
 }
 
-function waitPort(port, ms, proc) {
+function waitPort(port, ms, alive) {
   return new Promise((resolve, reject) => {
     const start = Date.now();
     const once = () => {
-      if (child !== proc) return reject(new Error("iptal edildi"));
+      if (!alive()) return reject(new Error("iptal edildi"));
       const s = net.connect({ host: "127.0.0.1", port }, () => {
         s.end();
         resolve();
@@ -674,7 +690,7 @@ function waitPort(port, ms, proc) {
 
 async function waitForTunnel(proc) {
   let last = new Error("tunel yok");
-  await waitPort(LOCAL_PORT, 8000, proc);
+  await waitPort(LOCAL_PORT, 8000, () => child === proc);
   for (let i = 0; i < 12; i++) {
     if (child !== proc) throw new Error("iptal edildi");
     try {
@@ -688,7 +704,7 @@ async function waitForTunnel(proc) {
 }
 
 async function startCore(id, transport) {
-  if (child) stopCore();
+  if (child || xrayChild) stopCore();
   const seq = ++connectSeq;
   const store = loadStore();
   const profile = pickProfile(store, id, transport);
@@ -709,7 +725,51 @@ async function startCore(id, transport) {
   const insecure = !network || network.mitm;
   if (seq !== connectSeq) throw new Error("iptal edildi");
 
-  const cfg = buildCoreConfig(profile.outbound, { tun: isTun, insecure, uplink: detectUplink(), localPort: LOCAL_PORT });
+  const uplink = detectUplink();
+  const viaXray = needsXray(profile.outbound);
+  let errBuf = "";
+  const collect = (d) => {
+    errBuf += d.toString();
+    if (errBuf.length > 4000) errBuf = errBuf.slice(-2000);
+  };
+
+  if (viaXray) {
+    const xbin = xrayPath();
+    if (!fs.existsSync(xbin)) throw new Error("Xray çekirdeği bulunamadı — GitHub Release paketini kullanın");
+    const mitm = Boolean(network && network.mitm);
+    if (mitm && !(network.pins && network.pins.length)) {
+      throw new Error("Ağın sertifika zinciri okunamadı; XHTTP bu ağda kullanılamıyor. HTTPUpgrade hattını deneyin.");
+    }
+    // SSL denetimi varsa agin CA'larini pinle (Xray 26'da allowInsecure yok); yoksa tam dogrulama.
+    const xcfg = buildXrayConfig(profile.outbound, { pins: mitm ? network.pins : [], uplink, socksPort: XRAY_PORT });
+    const xcfgPath = dataPath("xray.json");
+    writeAtomic(xcfgPath, JSON.stringify(xcfg, null, 2));
+    const xproc = spawn(xbin, ["run", "-c", xcfgPath], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+    xrayChild = xproc;
+    try { fs.writeFileSync(xrayPidPath(), String(xproc.pid)); } catch { /* yok */ }
+    xproc.stdout.on("data", collect);
+    xproc.stderr.on("data", collect);
+    xproc.on("exit", (code) => {
+      if (xrayChild !== xproc) return;
+      xrayChild = null;
+      if (!child) return;
+      const raw = stripAnsi(errBuf);
+      stopCore();
+      send("status", statusPayload({ lastError: friendlyErr(raw || `xray cikis ${code}`) }));
+    });
+    try {
+      await waitPort(XRAY_PORT, 8000, () => xrayChild === xproc && seq === connectSeq);
+    } catch (e) {
+      const raw = stripAnsi(errBuf);
+      if (xrayChild === xproc) stopCore();
+      throw new Error(raw ? `${friendlyErr(raw)} | ${raw.slice(-240)}` : friendlyErr(e));
+    }
+  }
+
+  const cfg = buildCoreConfig(profile.outbound, {
+    tun: isTun, insecure, uplink, localPort: LOCAL_PORT,
+    xrayPort: XRAY_PORT, xrayProcess: path.basename(xrayPath()),
+  });
   const cfgPath = dataPath("active.json");
   writeAtomic(cfgPath, JSON.stringify(cfg, null, 2));
 
@@ -718,11 +778,6 @@ async function startCore(id, transport) {
   activeId = id;
   tunActive = isTun;
   try { fs.writeFileSync(pidPath(), String(proc.pid)); } catch { /* yok */ }
-  let errBuf = "";
-  const collect = (d) => {
-    errBuf += d.toString();
-    if (errBuf.length > 4000) errBuf = errBuf.slice(-2000);
-  };
   proc.stderr.on("data", collect);
   proc.stdout.on("data", collect);
   proc.on("exit", (code) => {

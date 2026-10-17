@@ -1,6 +1,7 @@
 # Aether Client
 
-Electron masaüstü istemcisi (Windows / Linux, Pardus dahil). Çekirdek: sing-box 1.14 (`resources/bin`, CI indirir).
+Electron masaüstü istemcisi (Windows / Linux, Pardus dahil). Çekirdekler: sing-box 1.14 (proxy/TUN, yönlendirme) ve
+XHTTP hatları için Xray 26 (`resources/bin/<os>`, CI indirir). XHTTP'de sing-box trafiği yerel SOCKS (17891) ile Xray'e verir.
 
 `main`'e push → Release: Windows zip, Linux AppImage / .deb / .tar.gz
 
@@ -32,6 +33,7 @@ npm test
 npm start
 ```
 
-`npm start` için çekirdeği `resources/bin/win/aether-core.exe` (Linux: `resources/bin/linux/aether-core`) olarak koyun.
+`npm start` için çekirdekleri `resources/bin/win/aether-core.exe` ve `aether-xray.exe` (Linux: `resources/bin/linux/aether-core`,
+`aether-xray`) olarak koyun.
 sing-box sürümünü yükseltirken `.github/workflows/release.yml` içindeki `SING_BOX_VERSION` değerini değiştirin;
 CI üretilen config'leri `sing-box check` ile doğrular.

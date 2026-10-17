@@ -12,6 +12,7 @@ const LINKS = [
   `trojan://${UUID}@${D}:443?type=grpc&serviceName=svc-trpc&mode=gun&security=tls&sni=${D}&alpn=h2&pcs=ab#Trojan%20gRPC`,
   vmess({ v: "2", ps: "VMess UPG", add: D, port: "443", id: UUID, aid: "0", scy: "auto", net: "httpupgrade", type: "none", host: D, path: "/p-vmup", tls: "tls", sni: D, alpn: "http/1.1", fp: "chrome" }),
   vmess({ v: "2", ps: "VMess gRPC", add: D, port: "443", id: UUID, aid: "0", scy: "chacha20-poly1305", net: "grpc", type: "gun", host: D, path: "svc-vmpc", tls: "tls", sni: D }),
+  `vless://${UUID}@${D}:443?encryption=none&type=xhttp&host=${D}&path=%2Fp-xh&mode=packet-up&security=tls&sni=${D}&fp=chrome&alpn=h2%2Chttp%2F1.1&pcs=ab#VLESS%20XHTTP`,
   "ss://YWVzLTEyOC1nY206eA@h:443#atlanmali",
 ];
 
@@ -29,7 +30,7 @@ function test(name, fn) {
 const b64 = Buffer.from(LINKS.join("\n")).toString("base64");
 const profiles = L.parseSubscription(b64);
 
-test("base64 abonelik: desteklenmeyen link atlanir", () => assert.strictEqual(profiles.length, 6));
+test("base64 abonelik: desteklenmeyen link atlanir", () => assert.strictEqual(profiles.length, 7));
 test("json abonelik (links) ayni sonucu verir", () => {
   const j = L.parseSubscription(JSON.stringify({ links: LINKS }));
   assert.deepStrictEqual(j.map((p) => p.id), profiles.map((p) => p.id));
@@ -86,6 +87,40 @@ test("config: TUN + ag denetimi + kurum proxy'si", () => {
   assert.strictEqual(cfg.outbounds[0].detour, "uplink");
   assert.ok(cfg.route.rules.some((r) => r.action === "hijack-dns"));
   assert.ok(!cfg.dns.servers.some((s) => s.detour === "direct"), "bos direct detour sing-box'ta hata verir");
+});
+
+const xh = profiles.find((p) => p.meta.net === "xhttp");
+test("xhttp linki Xray gerektirir", () => {
+  assert.ok(L.needsXray(xh.outbound));
+  assert.ok(!L.needsXray(profiles[0].outbound));
+  assert.deepStrictEqual(xh.outbound.tls.alpn, ["h2", "http/1.1"]);
+  assert.strictEqual(xh.outbound.transport.mode, "packet-up");
+});
+test("xray config: okul agi pinleri ve kurum proxy'si", () => {
+  const x = L.buildXrayConfig(xh.outbound, { pins: ["aa", "bb"], uplink: { server: "10.0.0.1", server_port: 8080 }, socksPort: 17891 });
+  const st = x.outbounds[0].streamSettings;
+  assert.strictEqual(st.network, "xhttp");
+  assert.strictEqual(st.xhttpSettings.path, "/p-xh");
+  assert.strictEqual(st.tlsSettings.pinnedPeerCertSha256, "aa,bb");
+  assert.ok(!("allowInsecure" in st.tlsSettings), "Xray 26 allowInsecure'u reddeder");
+  assert.strictEqual(st.sockopt.dialerProxy, "uplink");
+  assert.strictEqual(x.inbounds[0].port, 17891);
+});
+test("xray config: normal agda pin yok (tam dogrulama)", () => {
+  const x = L.buildXrayConfig(xh.outbound, { pins: [], uplink: null, socksPort: 17891 });
+  assert.ok(!("pinnedPeerCertSha256" in x.outbounds[0].streamSettings.tlsSettings));
+});
+test("sing-box: xhttp hattinda socks -> Xray, TUN'da Xray sureci dogrudan", () => {
+  const cfg = L.buildCoreConfig(xh.outbound, { tun: true, insecure: true, uplink: { server: "10.0.0.1", server_port: 8080 }, localPort: 17890, xrayPort: 17891, xrayProcess: "aether-xray.exe" });
+  assert.deepStrictEqual(cfg.outbounds[0], { type: "socks", tag: "proxy", server: "127.0.0.1", server_port: 17891, version: "5" });
+  assert.ok(!cfg.outbounds.some((o) => o.tag === "uplink"), "kurum proxy'si Xray tarafinda");
+  const iProc = cfg.route.rules.findIndex((r) => r.process_name);
+  const iDns = cfg.route.rules.findIndex((r) => r.action === "hijack-dns");
+  assert.ok(iProc > 0 && iProc < iDns, "Xray DNS'i hijack'ten once dogrudan cikmali");
+});
+test("kardes hat secimi: XH", () => {
+  const upg = profiles.find((p) => p.meta.proto === "vless" && p.meta.net === "httpupgrade");
+  assert.strictEqual(L.pickProfile({ profiles }, upg.id, "xh").meta.net, "xhttp");
 });
 
 if (failed) {

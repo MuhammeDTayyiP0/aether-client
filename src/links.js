@@ -1,5 +1,5 @@
 "use strict";
-// Saf yardimcilar: link ayristirma, abonelik, sing-box (1.12+) yapilandirmasi.
+// Saf yardimcilar: link ayristirma, abonelik, sing-box (1.12+) ve Xray (XHTTP) yapilandirmasi.
 // Electron'a bagli degil; node ile test edilebilir.
 const crypto = require("crypto");
 const net = require("net");
@@ -17,12 +17,14 @@ function tlsBlock(sni, net, alpnRaw, fp, enabled) {
     enabled: true,
     server_name: sni,
     insecure: false,
-    alpn: alpn.length ? alpn : [net === "grpc" ? "h2" : "http/1.1"],
+    alpn: alpn.length ? alpn : net === "grpc" ? ["h2"] : net === "xhttp" ? ["h2", "http/1.1"] : ["http/1.1"],
     utls: { enabled: true, fingerprint: fp || "chrome" },
   };
 }
 
-function transportBlock(net, host, pathValue, serviceName) {
+function transportBlock(net, host, pathValue, serviceName, mode) {
+  // xhttp sing-box'ta yok; bu hatlar Xray cekirdegiyle calisir (buildXrayConfig).
+  if (net === "xhttp") return { type: "xhttp", host, path: pathValue || "/", mode: mode || "packet-up" };
   if (net === "grpc") return { type: "grpc", service_name: serviceName || "aether-grpc" };
   if (net === "httpupgrade") return { type: "httpupgrade", host, path: pathValue || "/" };
   if (net === "ws") return { type: "ws", path: pathValue || "/", headers: { Host: host } };
@@ -50,7 +52,7 @@ function parseUrlLink(link) {
   }
   const security = (q.get("security") || (proto === "trojan" ? "tls" : "none")).toLowerCase();
   ob.tls = tlsBlock(sni, net, q.get("alpn"), q.get("fp"), security === "tls");
-  ob.transport = transportBlock(net, host, q.get("path"), q.get("serviceName"));
+  ob.transport = transportBlock(net, host, q.get("path"), q.get("serviceName"), q.get("mode"));
   return { name, ob, meta: { proto, net, server, cred } };
 }
 
@@ -161,7 +163,11 @@ function parseSubscription(text) {
 // sing-box yapilandirmasi (1.12+ bicimi)
 // ---------------------------------------------------------------------------
 
-const TRANSPORT_FOR = { upg: "httpupgrade", ws: "ws", grpc: "grpc" };
+const TRANSPORT_FOR = { xh: "xhttp", upg: "httpupgrade", ws: "ws", grpc: "grpc" };
+
+function needsXray(outbound) {
+  return Boolean(outbound && outbound.transport && outbound.transport.type === "xhttp");
+}
 
 // Protokol secimi: ayni abonelikteki (ayni sunucu + anahtar) istenen tasiyicili kardes hat.
 function pickProfile(store, id, transport) {
@@ -175,13 +181,21 @@ function pickProfile(store, id, transport) {
   return sibling;
 }
 
-function buildCoreConfig(outbound, { tun, insecure, uplink, localPort }) {
-  const ob = JSON.parse(JSON.stringify(outbound));
-  ob.tag = "proxy";
-  if (ob.tls) ob.tls.insecure = Boolean(insecure);
-  if (uplink) ob.detour = "uplink";
+// sing-box her zaman on yuzdedir (proxy/TUN, DNS, yonlendirme). XHTTP hatlarinda trafik yerel
+// SOCKS ile Xray'e verilir; sunucuya Xray baglanir (kurum proxy'si de Xray tarafinda).
+function buildCoreConfig(outbound, { tun, insecure, uplink, localPort, xrayPort, xrayProcess }) {
+  const viaXray = needsXray(outbound);
+  let ob;
+  if (viaXray) {
+    ob = { type: "socks", tag: "proxy", server: "127.0.0.1", server_port: xrayPort, version: "5" };
+  } else {
+    ob = JSON.parse(JSON.stringify(outbound));
+    ob.tag = "proxy";
+    if (ob.tls) ob.tls.insecure = Boolean(insecure);
+    if (uplink) ob.detour = "uplink";
+  }
   const outbounds = [ob, { type: "direct", tag: "direct" }];
-  if (uplink) outbounds.push({ type: "http", tag: "uplink", server: uplink.server, server_port: uplink.server_port });
+  if (uplink && !viaXray) outbounds.push({ type: "http", tag: "uplink", server: uplink.server, server_port: uplink.server_port });
 
   const cfg = {
     log: { level: "warn", timestamp: true },
@@ -217,8 +231,43 @@ function buildCoreConfig(outbound, { tun, insecure, uplink, localPort }) {
       strategy: "ipv4_only",
     };
     cfg.route.rules.splice(1, 0, { protocol: "dns", action: "hijack-dns" });
+    // Xray'in kendi baglantilari (ve DNS sorgusu) TUN'a geri girerse dongu olur: dogrudan cikar.
+    if (viaXray) cfg.route.rules.splice(1, 0, { process_name: [xrayProcess], outbound: "direct" });
   }
   return cfg;
+}
+
+// Xray: 127.0.0.1:socksPort SOCKS -> VLESS XHTTP. SSL denetimi (MITM) olan agda allowInsecure
+// Xray 26'da kaldirildigi icin agin sertifika zinciri pinlenir (pins: CA SHA-256 listesi).
+function buildXrayConfig(outbound, { pins, uplink, socksPort }) {
+  const t = outbound.transport || {};
+  const tls = outbound.tls;
+  const stream = {
+    network: "xhttp",
+    xhttpSettings: { path: t.path || "/", host: t.host || outbound.server, mode: t.mode || "packet-up" },
+    security: tls ? "tls" : "none",
+  };
+  if (tls) {
+    stream.tlsSettings = {
+      serverName: tls.server_name || outbound.server,
+      fingerprint: (tls.utls && tls.utls.fingerprint) || "chrome",
+      alpn: tls.alpn && tls.alpn.length ? tls.alpn : ["h2", "http/1.1"],
+    };
+    if (pins && pins.length) stream.tlsSettings.pinnedPeerCertSha256 = pins.join(",");
+  }
+  if (uplink) stream.sockopt = { dialerProxy: "uplink" };
+  const outbounds = [{
+    tag: "proxy",
+    protocol: "vless",
+    settings: { vnext: [{ address: outbound.server, port: outbound.server_port, users: [{ id: outbound.uuid, encryption: "none" }] }] },
+    streamSettings: stream,
+  }];
+  if (uplink) outbounds.push({ tag: "uplink", protocol: "http", settings: { servers: [{ address: uplink.server, port: uplink.server_port }] } });
+  return {
+    log: { loglevel: "warning" },
+    inbounds: [{ tag: "socks-in", listen: "127.0.0.1", port: socksPort, protocol: "socks", settings: { auth: "noauth", udp: true } }],
+    outbounds,
+  };
 }
 
 function parseIp(text) {
@@ -231,7 +280,9 @@ function parseIp(text) {
 module.exports = {
   LINK_SCHEMES,
   buildCoreConfig,
+  buildXrayConfig,
   makeProfile,
+  needsXray,
   normalizeSubscription,
   parseIp,
   parseLink,

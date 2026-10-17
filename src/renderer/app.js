@@ -23,7 +23,7 @@ const copy = {
     netMitm: "Denetleniyor",
     mitm: (issuer) => `Bu ağ HTTPS trafiğini denetliyor (sertifika: ${issuer || "bilinmiyor"}). Bağlantı çalışır, ancak ağ yöneticisi VLESS/Trojan hatlarının içeriğini görebilir; VMess hatları içeriği ayrıca şifreler. Telefonlar için bu parmak izini panele (Telefon & Okul Ağı) girin:`,
     browser: "Tarayıcıyı tünel ile aç",
-    proto: { auto: "Seçili hat", upg: "HTTPUpgrade", ws: "WebSocket", grpc: "gRPC (HTTP/2)" },
+    proto: { auto: "Seçili hat", xh: "XHTTP (okul ağı)", upg: "HTTPUpgrade", ws: "WebSocket", grpc: "gRPC (HTTP/2)" },
   },
   en: {
     down: "DISCONNECTED",
@@ -49,7 +49,7 @@ const copy = {
     netMitm: "Inspected",
     mitm: (issuer) => `This network inspects HTTPS (certificate: ${issuer || "unknown"}). The tunnel works, but the network admin can read VLESS/Trojan contents; VMess lines add their own encryption. For phones, enter this fingerprint in the panel:`,
     browser: "Open browser through tunnel",
-    proto: { auto: "Selected line", upg: "HTTPUpgrade", ws: "WebSocket", grpc: "gRPC (HTTP/2)" },
+    proto: { auto: "Selected line", xh: "XHTTP (school networks)", upg: "HTTPUpgrade", ws: "WebSocket", grpc: "gRPC (HTTP/2)" },
   },
 };
 
@@ -74,6 +74,7 @@ function selectedProfile() {
 
 function protoLabel(p) {
   const net = (p.meta && p.meta.net) || "";
+  if (net === "xhttp") return ["XHTTP", "upg"];
   if (net === "grpc") return ["gRPC", "grpc"];
   if (net === "httpupgrade") return ["UPG", "upg"];
   if (net === "ws") return ["WS", ""];
@@ -88,7 +89,7 @@ function paint() {
   $("modeHint").textContent = tunMode ? T.tunOn : T.tunOff;
   $("modeTun").classList.toggle("on", tunMode);
   $("modeProxy").classList.toggle("on", !tunMode);
-  for (const key of ["auto", "upg", "ws", "grpc"]) {
+  for (const key of ["auto", "xh", "upg", "ws", "grpc"]) {
     $(`proto${key[0].toUpperCase()}${key.slice(1)}`).classList.toggle("on", selectedProto === key);
   }
   $("protoHint").textContent = T.proto[selectedProto];
@@ -248,7 +249,7 @@ async function setTun(on) {
 $("modeTun").addEventListener("click", () => setTun(true));
 $("modeProxy").addEventListener("click", () => setTun(false));
 
-for (const key of ["auto", "upg", "ws", "grpc"]) {
+for (const key of ["auto", "xh", "upg", "ws", "grpc"]) {
   $(`proto${key[0].toUpperCase()}${key.slice(1)}`).addEventListener("click", () => {
     selectedProto = key;
     paint();

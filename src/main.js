@@ -630,7 +630,8 @@ function probeOne(url) {
     const started = Date.now();
     const req = http.request({
       host: "127.0.0.1", port: LOCAL_PORT, path: url, method: "GET",
-      headers: { Connection: "close", "User-Agent": "Aether" }, timeout: 8000,
+      // Host verilmezse Node "127.0.0.1:17890" yazar; Cloudflare/icanhazip bu istegi keser (ECONNRESET).
+      headers: { Host: new URL(url).host, Connection: "close", "User-Agent": "Aether" }, timeout: 8000,
     }, (res) => {
       let d = "";
       res.on("data", (c) => { d += c; });

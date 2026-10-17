@@ -506,11 +506,68 @@ function migrateConfig(cfg) {
         return patched;
       });
   }
-  next.route = { final: "proxy", default_domain_resolver: "local" };
+  next.route = {
+    rules: [
+      {
+        domain_suffix: [
+          ".gov.tr",
+          ".meb.gov.tr",
+          ".eba.gov.tr",
+          ".edu.tr"
+        ],
+        outbound: "direct"
+      }
+    ],
+    final: "proxy",
+    default_domain_resolver: "local"
+  };
+  if (!next.outbounds.some(function (o) { return o.tag === "direct"; })) {
+    next.outbounds.push({ type: "direct", tag: "direct" });
+  }
   if (!Array.isArray(next.inbounds) || !next.inbounds.length) {
     next.inbounds = [{ type: "mixed", tag: "mixed-in", listen: "127.0.0.1", listen_port: LOCAL_PORT }];
   }
   return next;
+}
+
+function singboxFromTrojan(link) {
+  const u = new URL(link.trim());
+  if (u.protocol !== "trojan:") throw new Error("trojan:// bekleniyor");
+  const pass = decodeURIComponent(u.username);
+  const host = u.hostname;
+  const port = Number(u.port || 443);
+  const q = u.searchParams;
+  const name = decodeURIComponent(u.hash.replace(/^#/, "")) || (host + " (Trojan)");
+  const type = (q.get("type") || "ws").toLowerCase();
+  const sni = q.get("sni") || host;
+
+  let transportObj = {};
+  if (type === "httpupgrade") {
+    transportObj = {
+      type: "httpupgrade",
+      host: q.get("host") || host,
+      path: decodeURIComponent(q.get("path") || "/"),
+    };
+  } else {
+    transportObj = {
+      type: "ws",
+      path: decodeURIComponent(q.get("path") || "/"),
+      headers: { Host: q.get("host") || host },
+    };
+  }
+
+  return {
+    name: name,
+    domain: host,
+    config: migrateConfig({
+      inbounds: [{ type: "mixed", tag: "mixed-in", listen: "127.0.0.1", listen_port: LOCAL_PORT }],
+      outbounds: [{
+        type: "trojan", tag: "proxy", server: host, server_port: port, password: pass,
+        tls: hardenTls({ enabled: true }, sni, false),
+        transport: transportObj,
+      }],
+    }),
+  };
 }
 
 function singboxFromVless(link) {
@@ -575,11 +632,15 @@ function domainFromConfig(cfg) {
 
 function itemToProfile(item, i) {
   if (typeof item === "string") {
-    const parsed = singboxFromVless(item);
+    const parsed = item.indexOf("trojan://") === 0 ? singboxFromTrojan(item) : singboxFromVless(item);
     return { id: "remote-" + i + "-" + parsed.domain, name: parsed.name, domain: parsed.domain, config: parsed.config, source: "remote" };
   }
   if (item && item.vless) {
     const parsed = singboxFromVless(item.vless);
+    return { id: "remote-" + i + "-" + parsed.domain, name: item.name || parsed.name, domain: parsed.domain, config: parsed.config, source: "remote" };
+  }
+  if (item && item.trojan) {
+    const parsed = singboxFromTrojan(item.trojan);
     return { id: "remote-" + i + "-" + parsed.domain, name: item.name || parsed.name, domain: parsed.domain, config: parsed.config, source: "remote" };
   }
   if (item && item.config && item.config.outbounds) {
@@ -591,13 +652,13 @@ function itemToProfile(item, i) {
 function parseVlist(text) {
   const t = String(text || "").trim();
   if (!t) throw new Error("liste bos");
-  if (t.indexOf("vless://") === 0) {
-    return t.split(/\r?\n/).map(function (l) { return l.trim(); }).filter(function (l) { return l.indexOf("vless://") === 0 && l.indexOf("#") !== 0; });
+  if (t.indexOf("vless://") === 0 || t.indexOf("trojan://") === 0) {
+    return t.split(/\r?\n/).map(function (l) { return l.trim(); }).filter(function (l) { return (l.indexOf("vless://") === 0 || l.indexOf("trojan://") === 0) && l.indexOf("#") !== 0; });
   }
   const j = JSON.parse(t);
   if (Array.isArray(j)) return j;
   if (j.nodes) return j.nodes;
-  if (j.vless || j.config) return [j];
+  if (j.vless || j.trojan || j.config) return [j];
   throw new Error("list.json bicimi hatali");
 }
 
@@ -627,13 +688,40 @@ async function pullVlist() {
   try { return applyFallback(); } catch { throw lastErr || new Error("liste alinamadi"); }
 }
 
-function addFromText(raw) {
+async function addFromText(raw) {
   const text = String(raw || "").trim();
   if (!text) throw new Error("Bos");
   const store = loadStore();
+
+  // Abonelik URL'si eklendiyse (örn: https://vpn.geldesat.com/sub/admin)
+  if (text.indexOf("http://") === 0 || text.indexOf("https://") === 0) {
+    const rawFetched = await fetchText(text);
+    let decoded = rawFetched;
+    try {
+      decoded = Buffer.from(rawFetched.trim(), "base64").toString("utf8");
+    } catch {}
+    const lines = decoded.split(/\r?\n/).map(function (l) { return l.trim(); }).filter(Boolean);
+    let count = 0;
+    lines.forEach(function (l) {
+      try {
+        let p;
+        if (l.indexOf("vless://") === 0) p = singboxFromVless(l);
+        else if (l.indexOf("trojan://") === 0) p = singboxFromTrojan(l);
+        if (p) {
+          store.profiles.push({ id: "sub-" + Date.now() + "-" + (count++), name: p.name, domain: p.domain, config: p.config, source: "local" });
+        }
+      } catch {}
+    });
+    saveStore(store);
+    return store.profiles;
+  }
+
   let profile;
   if (text.indexOf("vless://") === 0) {
     const parsed = singboxFromVless(text);
+    profile = { id: "local-" + Date.now(), name: parsed.name, domain: parsed.domain, config: parsed.config, source: "local" };
+  } else if (text.indexOf("trojan://") === 0) {
+    const parsed = singboxFromTrojan(text);
     profile = { id: "local-" + Date.now(), name: parsed.name, domain: parsed.domain, config: parsed.config, source: "local" };
   } else {
     const cfg = JSON.parse(text);

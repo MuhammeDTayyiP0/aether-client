@@ -18,7 +18,7 @@ extraResources:
 win:
   target:
     - zip
-  signAndEditExecutable: false
+  signExecutable: false
   artifactName: aether-${version}-windows-amd64.zip
 linux:
   target:

@@ -16,6 +16,12 @@ concurrency:
 permissions:
   contents: write
 
+env:
+  # Cekirdek surumu sabit: config bicimi bu surume gore yazildi (src/links.js).
+  # Yukseltirken once yerelde "npm test" ve sing-box check ile dogrulayin.
+  SING_BOX_VERSION: "1.14.2"
+  NODE_VERSION: "22"
+
 jobs:
   linux:
     runs-on: ubuntu-22.04
@@ -23,41 +29,41 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: ${{ env.NODE_VERSION }}
+      - run: npm ci
+      - run: npm test
       - name: Fetch linux core
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          TAG=$(curl -fsSL -H "Authorization: Bearer ${GITHUB_TOKEN}" https://api.github.com/repos/SagerNet/sing-box/releases/latest 2>/dev/null | jq -r .tag_name || true)
-          if [ -z "$TAG" ] || [ "$TAG" = "null" ]; then
-            TAG=$(curl -fsSI "https://github.com/SagerNet/sing-box/releases/latest" | grep -i "^location:" | sed -e 's/.*tag\///' | tr -d '\r\n')
-          fi
-          if [ -z "$TAG" ] || [ "$TAG" = "null" ]; then
-            TAG="v1.11.4"
-          fi
-          VER="${TAG#v}"
-          echo "Sing-box version: $TAG ($VER)"
+          VER="${SING_BOX_VERSION}"
           mkdir -p resources/bin/linux build
-          curl -fsSL -o linux.tgz "https://github.com/SagerNet/sing-box/releases/download/${TAG}/sing-box-${VER}-linux-amd64.tar.gz"
+          curl -fsSL -o linux.tgz "https://github.com/SagerNet/sing-box/releases/download/v${VER}/sing-box-${VER}-linux-amd64.tar.gz"
           tar -xzf linux.tgz
-          cp sing-box-*/sing-box resources/bin/linux/aether-core
+          cp "sing-box-${VER}-linux-amd64/sing-box" resources/bin/linux/aether-core
           chmod +x resources/bin/linux/aether-core
           python3 packaging/make_icon.py build/icon.png
-      - run: npm install
+      - name: Check generated configs with core
+        run: |
+          set -euo pipefail
+          node -e '
+            const fs = require("fs"); const L = require("./src/links");
+            const link = "vless://00000000-0000-4000-8000-000000000000@vpn.example.com:443?type=httpupgrade&host=vpn.example.com&path=%2Fp-upg&security=tls&sni=vpn.example.com&alpn=http%2F1.1#t";
+            const [p] = L.parseSubscription(link);
+            for (const tun of [false, true]) for (const insecure of [false, true])
+              fs.writeFileSync(`cfg-${tun}-${insecure}.json`, JSON.stringify(L.buildCoreConfig(p.outbound, { tun, insecure, uplink: tun ? null : { server: "10.0.0.1", server_port: 8080 }, localPort: 17890 })));
+          '
+          for f in cfg-*.json; do resources/bin/linux/aether-core check -c "$f"; done
       - name: Build deb + tar.gz
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
         run: |
-          echo "electron-builder start $(date -u +%H:%M:%S)"
           npx electron-builder --linux deb tar.gz --publish never \
-            --config.extraMetadata.version=1.1.${{ github.run_number }}
-          echo "electron-builder done $(date -u +%H:%M:%S)"
+            --config.extraMetadata.version=1.2.${{ github.run_number }}
           ls -lh dist
       - name: AppImage (no FUSE)
         run: |
           set -euo pipefail
-          VER="1.1.${{ github.run_number }}"
+          VER="1.2.${{ github.run_number }}"
           APPDIR=dist/Aether.AppDir
           rm -rf "$APPDIR"
           mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/lib"
@@ -96,34 +102,24 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: ${{ env.NODE_VERSION }}
+      - run: npm ci
       - name: Fetch windows core
         shell: bash
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          TAG=$(curl -fsSL -H "Authorization: Bearer ${GITHUB_TOKEN}" https://api.github.com/repos/SagerNet/sing-box/releases/latest 2>/dev/null | jq -r .tag_name || true)
-          if [ -z "$TAG" ] || [ "$TAG" = "null" ]; then
-            TAG=$(curl -fsSI "https://github.com/SagerNet/sing-box/releases/latest" | grep -i "^location:" | sed -e 's/.*tag\///' | tr -d '\r\n')
-          fi
-          if [ -z "$TAG" ] || [ "$TAG" = "null" ]; then
-            TAG="v1.11.4"
-          fi
-          VER="${TAG#v}"
-          echo "Sing-box version: $TAG ($VER)"
+          VER="${SING_BOX_VERSION}"
           mkdir -p resources/bin/win build
-          curl -fsSL -o win.zip "https://github.com/SagerNet/sing-box/releases/download/${TAG}/sing-box-${VER}-windows-amd64.zip"
+          curl -fsSL -o win.zip "https://github.com/SagerNet/sing-box/releases/download/v${VER}/sing-box-${VER}-windows-amd64.zip"
           unzip -j win.zip "*/sing-box.exe" -d resources/bin/win
           mv resources/bin/win/sing-box.exe resources/bin/win/aether-core.exe
           curl -fsSL -A "Mozilla/5.0" -o wintun.zip https://www.wintun.net/builds/wintun-0.14.1.zip
           python packaging/fetch_wintun.py wintun.zip resources/bin/win/wintun.dll
           python packaging/make_icon.py build/icon.png
-      - run: npm install
       - name: Build Windows
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
-        run: npx electron-builder --win zip --publish never --config.extraMetadata.version=1.1.${{ github.run_number }}
+        run: npx electron-builder --win zip --publish never --config.extraMetadata.version=1.2.${{ github.run_number }}
       - uses: actions/upload-artifact@v4
         with:
           name: windows
@@ -140,8 +136,8 @@ jobs:
       - run: ls -lh out
       - uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.1.${{ github.run_number }}
-          name: Aether v1.1.${{ github.run_number }}
+          tag_name: v1.2.${{ github.run_number }}
+          name: Aether v1.2.${{ github.run_number }}
           generate_release_notes: true
           make_latest: true
           files: out/aether-*

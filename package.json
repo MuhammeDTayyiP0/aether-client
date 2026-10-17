@@ -1,7 +1,7 @@
 {
   "name": "aether",
-  "version": "1.1.0",
-  "description": "Aether — Cloudflare kenarlı masaüstü istemci",
+  "version": "1.2.0",
+  "description": "Aether — masaüstü VPN istemcisi (sing-box çekirdeği)",
   "main": "src/main.js",
   "author": "Aether <aether@local>",
   "license": "MIT",
@@ -14,10 +14,11 @@
     "dev": "electron .",
     "start": "electron .",
     "pack": "electron-builder --dir",
-    "dist": "electron-builder"
+    "dist": "electron-builder",
+    "test": "node test/links.test.js"
   },
   "devDependencies": {
-    "electron": "22.3.27",
-    "electron-builder": "24.13.3"
+    "electron": "43.7.7",
+    "electron-builder": "26.15.3"
   }
 }

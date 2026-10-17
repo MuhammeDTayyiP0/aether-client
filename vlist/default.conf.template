@@ -1,0 +1,28 @@
+# Abonelik aynasi: ana alan adi (AETHER_SERVER) bir agda engellenirse istemci
+# aboneligini bu alan adindan ceker. Sadece /sub/ yolu iletilir; anahtar/liste tutulmaz.
+# ${AETHER_SERVER} nginx imajinin envsubst sablonu ile doldurulur.
+server {
+    listen 80;
+    server_name _;
+    root /usr/share/nginx/html;
+
+    # Alan adi her istekte cozulsun (ana sunucu DNS'i acilista yoksa nginx yine baslar)
+    resolver 1.1.1.1 8.8.8.8 valid=300s ipv6=off;
+    set $aether_upstream ${AETHER_SERVER};
+
+    location /sub/ {
+        proxy_pass https://$aether_upstream$request_uri;
+        proxy_set_header Host $aether_upstream;
+        proxy_ssl_server_name on;
+        proxy_ssl_name $aether_upstream;
+        proxy_ssl_verify on;
+        proxy_ssl_trusted_certificate /etc/ssl/certs/ca-certificates.crt;
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 10s;
+        add_header Cache-Control "no-store" always;
+    }
+
+    location / {
+        try_files $uri /index.html;
+    }
+}

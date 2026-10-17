@@ -813,3 +813,36 @@ html, body {
   gap: 6px;
   font-family: var(--font-mono);
 }
+
+/* ---------------- Ag denetimi uyarisi ---------------- */
+.net-notice {
+  margin: 10px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--accent-amber);
+  background: var(--accent-amber-bg);
+  border-radius: 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-primary);
+}
+.net-notice-text { margin: 0 0 6px; }
+.net-notice-pins {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-secondary);
+  word-break: break-all;
+  white-space: pre-wrap;
+  margin-bottom: 6px;
+}
+.net-notice-btn {
+  margin-top: 6px;
+  padding: 5px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border-muted);
+  background: var(--bg-surface-hover);
+  color: var(--text-primary);
+  font-size: 11px;
+  cursor: pointer;
+}
+.net-notice-btn:hover { border-color: var(--border-accent); }
+[hidden] { display: none !important; }

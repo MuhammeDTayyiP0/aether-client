@@ -6,10 +6,12 @@ contextBridge.exposeInMainWorld("aether", {
   setTun: (on) => ipcRenderer.invoke("set-tun", on),
   addProfile: (text) => ipcRenderer.invoke("add-profile", text),
   removeProfile: (id) => ipcRenderer.invoke("remove-profile", id),
-  connect: (id, proto) => ipcRenderer.invoke("connect", id, proto),
+  connect: (id, transport) => ipcRenderer.invoke("connect", id, transport),
   disconnect: () => ipcRenderer.invoke("disconnect"),
   launchBrowser: () => ipcRenderer.invoke("launch-browser"),
   refreshVlist: () => ipcRenderer.invoke("refresh-vlist"),
+  copy: (text) => ipcRenderer.invoke("copy", text),
+  relaunchAdmin: () => ipcRenderer.invoke("relaunch-admin"),
   onStatus: (fn) => {
     ipcRenderer.on("status", (_e, payload) => fn(payload));
   },

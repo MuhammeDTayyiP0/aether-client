@@ -4,10 +4,10 @@
     <meta charset="utf-8" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' data:"
+      content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:"
     />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Aether Shield</title>
+    <title>Aether</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
@@ -68,14 +68,14 @@
                 <span class="t-val" id="ipValue">127.0.0.1</span>
               </div>
               <div class="telemetry-sep"></div>
-              <div class="telemetry-item" title="Tünel Gecikmesi">
+              <div class="telemetry-item" title="Tünel üzerinden ölçülen gecikme">
                 <span class="t-icon">PING</span>
-                <span class="t-val" id="pingValue">Ultra Hızlı</span>
+                <span class="t-val" id="pingValue">—</span>
               </div>
               <div class="telemetry-sep"></div>
-              <div class="telemetry-item" title="Güvenlik Modu">
-                <span class="t-icon">SEC</span>
-                <span class="t-val">TLS 1.3</span>
+              <div class="telemetry-item" title="Ağın HTTPS denetimi yapıp yapmadığı">
+                <span class="t-icon">AĞ</span>
+                <span class="t-val" id="netValue">—</span>
               </div>
             </div>
           </div>
@@ -125,19 +125,24 @@
         <div id="browserRow" class="browser-row" hidden>
           <button type="button" class="chrome-launch-btn" id="launchBrowserBtn">
             <span class="launch-icon">🌐</span>
-            <span>Chrome'u Tünel ile Başlat</span>
+            <span id="launchBrowserText">Tarayıcıyı tünel ile aç</span>
             <span class="launch-tag">İzole</span>
           </button>
         </div>
 
-        <!-- Connection Pipeline Steps -->
-        <ol class="pipeline-track" id="steps" hidden></ol>
+        <!-- Okul / kurum agi SSL denetimi uyarisi -->
+        <div class="net-notice" id="netNotice" hidden>
+          <p class="net-notice-text" id="netNoticeText"></p>
+          <div class="net-notice-pins" id="netPins"></div>
+          <button type="button" class="net-notice-btn" id="copyPins">Parmak izini kopyala</button>
+        </div>
 
         <!-- Error Notification Toast -->
         <div class="alert-toast" id="errBox" hidden>
           <div class="alert-icon">!</div>
           <div class="alert-content">
             <p class="err-text" id="err"></p>
+            <button type="button" class="net-notice-btn" id="elevateBtn" hidden>Yönetici olarak yeniden başlat</button>
           </div>
         </div>
 
@@ -149,7 +154,7 @@
               <span class="blade-counter" id="serverCount">0</span>
             </div>
             <div class="blade-actions">
-              <span class="hub-url" id="fetchHint">vlist.geldesat.com</span>
+              <span class="hub-url" id="fetchHint"></span>
               <button type="button" class="blade-refresh-btn" id="reload" title="Düğümleri Güncelle">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2" />
@@ -165,11 +170,11 @@
           <!-- Manual Import Drawer -->
           <div class="manual-drawer">
             <button type="button" class="drawer-trigger" id="manualToggle">
-              <span class="drawer-title">+ Abonelik Linki, Token veya Profil Ekle</span>
+              <span class="drawer-title" id="manualTitle">+ Abonelik kodu veya profil ekle</span>
               <span class="drawer-arrow">▾</span>
             </button>
             <div id="manual" class="drawer-body" hidden>
-              <textarea id="paste" rows="2" spellcheck="false" placeholder="Abonelik linki (https://.../sub/...), kullanıcı tokeni veya vless:// / trojan:// / vmess://"></textarea>
+              <textarea id="paste" rows="2" spellcheck="false" placeholder="Abonelik kodu / linki (https://…/sub/…) ya da vless:// trojan:// vmess:// linki"></textarea>
               <button type="button" class="drawer-add-btn" id="add">İçe Aktar</button>
             </div>
           </div>
@@ -184,7 +189,7 @@
         </div>
         <div class="footbar-right">
           <span class="edition-tag">Aether</span>
-          <span class="version-tag">v1.2</span>
+          <span class="version-tag" id="versionTag"></span>
         </div>
       </footer>
     </div>

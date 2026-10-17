@@ -1,5 +1,3 @@
-process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
-
 const {
   app,
   BrowserWindow,
@@ -8,59 +6,55 @@ const {
   Menu,
   nativeImage,
   powerMonitor,
+  clipboard,
 } = require("electron");
 const path = require("path");
 const fs = require("fs");
-const https = require("https");
 const http = require("http");
 const net = require("net");
+const tls = require("tls");
+const crypto = require("crypto");
 const { spawn, execFileSync } = require("child_process");
+const {
+  LINK_SCHEMES,
+  buildCoreConfig,
+  makeProfile,
+  normalizeSubscription,
+  parseIp,
+  parseLink,
+  parseSubscription,
+  pickProfile,
+  proxyOutboundFromConfig,
+} = require("./links");
 
 const LOCAL_PORT = 17890;
-
-try {
-  app.commandLine.appendSwitch("ignore-certificate-errors");
-  app.commandLine.appendSwitch("allow-insecure-localhost");
-} catch {
-  /* ignore */
-}
-
-try {
-  https.globalAgent.options.rejectUnauthorized = false;
-} catch {
-  /* ignore */
-}
-
-const insecureAgent = new https.Agent({
-  rejectUnauthorized: false,
-  keepAlive: false,
-});
-
-const VLIST_URLS = [
-  "https://vpn.geldesat.com/list.json",
-  "https://vpn.geldesat.com/sub/admin?format=json",
-  "https://vlist.geldesat.com/list.json",
-  "http://vlist.geldesat.com/list.json",
-];
-
-const FALLBACK_VLESS =
-  "vless://a34d5014-2895-46ce-96c3-5b872a4a79fe@vpn.geldesat.com:443?encryption=none&security=tls&sni=vpn.geldesat.com&fp=chrome&type=httpupgrade&host=vpn.geldesat.com&path=%2Faether-upg#Aether%20(HTTPUpgrade)";
+const DEFAULT_SERVER = "vpn.geldesat.com";
+// Ana alan adi engellenirse abonelik bu aynalardan da denenir (vlist/ nginx /sub/ proxy'si).
+const SUB_MIRRORS = ["vlist.geldesat.com"];
 
 let win = null;
 let tray = null;
 let child = null;
 let activeId = null;
 let lastExitIp = "";
+let lastLatencyMs = 0;
 let proxyArmed = false;
 let tunActive = false;
 let quitting = false;
+// Her baglanti denemesi/iptal bu sayaci arttirir; bekleyen eski deneme kendini iptal eder.
+let connectSeq = 0;
 
-function storePath() {
-  return path.join(app.getPath("userData"), "profiles.json");
+// ---------------------------------------------------------------------------
+// Depolama
+// ---------------------------------------------------------------------------
+
+function dataPath(name) {
+  return path.join(app.getPath("userData"), name);
 }
-function pidPath() {
-  return path.join(app.getPath("userData"), "core.pid");
-}
+const storePath = () => dataPath("profiles.json");
+const pidPath = () => dataPath("core.pid");
+const proxyPrevPath = () => dataPath("proxy-prev.json");
+
 function iconFile() {
   const local = path.join(__dirname, "icon.png");
   if (fs.existsSync(local)) return local;
@@ -69,16 +63,49 @@ function iconFile() {
   return local;
 }
 
-function loadStore() {
-  try {
-    return JSON.parse(fs.readFileSync(storePath(), "utf8"));
-  } catch {
-    return { profiles: [], locale: "tr" };
-  }
+function writeAtomic(file, text) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = `${file}.tmp`;
+  fs.writeFileSync(tmp, text);
+  fs.renameSync(tmp, file);
 }
+
+function loadStore() {
+  let s;
+  try {
+    s = JSON.parse(fs.readFileSync(storePath(), "utf8"));
+  } catch {
+    s = {};
+  }
+  return migrateStore(s);
+}
+
 function saveStore(data) {
-  fs.mkdirSync(app.getPath("userData"), { recursive: true });
-  fs.writeFileSync(storePath(), JSON.stringify(data, null, 2));
+  writeAtomic(storePath(), JSON.stringify(data, null, 2));
+}
+
+// Eski surum (tum kullanicilarin paylastigi gomulu anahtar + tam sing-box config'i) -> yeni bicim.
+function migrateStore(s) {
+  const store = {
+    profiles: [],
+    locale: s.locale === "en" ? "en" : "tr",
+    tunMode: Boolean(s.tunMode),
+    subscription: s.subscription || null,
+    remoteAt: s.remoteAt || null,
+    network: s.network || null,
+  };
+  for (const p of Array.isArray(s.profiles) ? s.profiles : []) {
+    if (!p || typeof p !== "object") continue;
+    // Eski uzak profiller paylasilan (iptal edilen) anahtari tasir; abonelikten yeniden cekilir.
+    if (p.source !== "local" && !store.subscription) continue;
+    if (p.outbound) {
+      store.profiles.push(p);
+      continue;
+    }
+    const ob = p.config && proxyOutboundFromConfig(p.config);
+    if (ob) store.profiles.push(makeProfile(ob, p.name, p.source === "remote" ? "remote" : "local", p.id));
+  }
+  return store;
 }
 
 function corePath() {
@@ -87,186 +114,278 @@ function corePath() {
   return path.join(__dirname, "..", "resources", "bin", name);
 }
 
+// ---------------------------------------------------------------------------
+// Durum / IPC yardimcilari
+// ---------------------------------------------------------------------------
+
 function send(channel, payload) {
   if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
+  if (channel === "status") updateTrayMenu();
 }
 
 function statusPayload(extra) {
-  extra = extra || {};
   const store = loadStore();
   return Object.assign({
     running: Boolean(child),
     activeId,
-    core: corePath(),
     coreOk: fs.existsSync(corePath()),
-    vlist: VLIST_URLS[0],
     platform: process.platform,
+    version: app.getVersion(),
     exitIp: lastExitIp || "",
+    latencyMs: lastLatencyMs || 0,
     tunMode: Boolean(store.tunMode),
     tunArmed: Boolean(tunActive),
-  }, extra);
+    subscription: store.subscription ? maskSubscription(store.subscription.url) : "",
+    network: store.network || null,
+  }, extra || {});
+}
+
+function maskSubscription(url) {
+  try {
+    const u = new URL(url);
+    const parts = u.pathname.split("/");
+    const token = parts.pop() || "";
+    return `${u.host}${parts.join("/")}/${token.slice(0, 4)}…`;
+  } catch {
+    return "";
+  }
 }
 
 function friendlyErr(e) {
   const raw = String((e && e.message) || e || "");
   const s = raw.toLowerCase();
-  if (
-    s.indexOf("self-signed") !== -1 ||
-    s.indexOf("self signed") !== -1 ||
-    s.indexOf("certificate") !== -1 ||
-    s.indexOf("certifika") !== -1 ||
-    s.indexOf("unknown authority") !== -1
-  ) {
-    return "sertifika atlandi — v1.1.20+ kullan, Yenile ye bas";
+  if (s.includes("certificate") || s.includes("x509") || s.includes("self-signed") || s.includes("self signed")) {
+    return "Sunucu sertifikası doğrulanamadı. Ağ SSL denetimi yapıyor olabilir; Yenile'ye basıp tekrar deneyin.";
   }
-  if (s.indexOf("detour") !== -1 || s.indexOf("empty direct") !== -1) {
-    return "cekirdek ayari duzeltildi — v1.1.20 yukle";
+  if (s.includes("operation not permitted") || s.includes("access is denied") || s.includes("erişim engellendi")) {
+    return "TUN modu yönetici yetkisi ister.";
   }
-  if (s.indexOf("zaman") !== -1 || s.indexOf("timeout") !== -1 || s.indexOf("tunel yok") !== -1) {
-    return "tunel zaman asimi — 443/WS kapali veya okul proxy. Yeni surumu dene";
+  if (s.includes("zaman asimi") || s.includes("timeout") || s.includes("tunel yok")) {
+    return "Tünel zaman aşımı: hat engelleniyor olabilir. Başka bir protokol (UPG/WS/gRPC) veya düğüm deneyin.";
   }
   return raw;
 }
+
+// ---------------------------------------------------------------------------
+// Cekirdek sureci
+// ---------------------------------------------------------------------------
 
 function killPid(pid) {
   if (!pid) return;
   try {
     if (process.platform === "win32") {
-      spawn("taskkill", ["/pid", String(pid), "/f", "/t"], { windowsHide: true, stdio: "ignore" });
+      execFileSync("taskkill", ["/pid", String(pid), "/f", "/t"], { windowsHide: true, stdio: "ignore", timeout: 4000 });
     } else {
-      try { process.kill(pid, "SIGTERM"); } catch {}
-      setTimeout(function () { try { process.kill(pid, "SIGKILL"); } catch {} }, 800);
+      try { process.kill(pid, "SIGTERM"); } catch { /* yok */ }
+      setTimeout(() => { try { process.kill(pid, "SIGKILL"); } catch { /* yok */ } }, 800);
     }
-  } catch {}
+  } catch { /* zaten kapanmis */ }
 }
 
 function killStale() {
   try {
     const pid = parseInt(fs.readFileSync(pidPath(), "utf8"), 10);
     if (pid && pid !== process.pid) killPid(pid);
-  } catch {}
-  try { fs.unlinkSync(pidPath()); } catch {}
+  } catch { /* pid dosyasi yok */ }
+  try { fs.unlinkSync(pidPath()); } catch { /* yok */ }
 }
 
 function stopCore() {
+  connectSeq += 1;
   const proc = child;
   child = null;
   activeId = null;
   lastExitIp = "";
+  lastLatencyMs = 0;
   tunActive = false;
   if (proc && proc.pid) killPid(proc.pid);
-  try { fs.unlinkSync(pidPath()); } catch {}
+  try { fs.unlinkSync(pidPath()); } catch { /* yok */ }
   clearSystemProxy();
   send("status", statusPayload());
 }
 
-function proxyPrevPath() {
-  return path.join(app.getPath("userData"), "proxy-prev.json");
-}
+// ---------------------------------------------------------------------------
+// Sistem proxy'si (Windows / GNOME / KDE)
+// ---------------------------------------------------------------------------
+
+const WIN_INET_KEY = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings";
+const WIN_BYPASS = "<local>;localhost;127.*;10.*;172.16.*;192.168.*";
 
 function winReg(args) {
   try {
-    return execFileSync("reg", args, { windowsHide: true, timeout: 4000 }).toString();
+    return execFileSync("reg", args, { windowsHide: true, timeout: 4000, stdio: ["ignore", "pipe", "pipe"] }).toString();
   } catch (e) {
-    return (e.stdout || e.stderr || "").toString();
+    return String((e && (e.stdout || e.stderr)) || "");
+  }
+}
+
+function winRegGet(name) {
+  const out = winReg(["query", WIN_INET_KEY, "/v", name]);
+  const m = out.match(new RegExp(`${name}\\s+(REG_\\w+)\\s+(.*)`, "i"));
+  if (!m) return null;
+  const value = m[2].trim();
+  return m[1].toUpperCase() === "REG_DWORD" ? String(parseInt(value, 16)) : value;
+}
+
+function winRegSet(name, type, value) {
+  if (value === null || value === undefined) {
+    winReg(["delete", WIN_INET_KEY, "/v", name, "/f"]);
+  } else {
+    winReg(["add", WIN_INET_KEY, "/v", name, "/t", type, "/d", String(value), "/f"]);
   }
 }
 
 function refreshWinInet() {
   try {
-    execFileSync("powershell.exe", ["-NoProfile", "-Command",
+    execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",
       "Add-Type -TypeDefinition 'using System.Runtime.InteropServices;public class A{[DllImport(\"wininet.dll\")]public static extern bool InternetSetOption(int h,int o,int l,int s);};' ; [A]::InternetSetOption(0,39,0,0)|Out-Null; [A]::InternetSetOption(0,37,0,0)|Out-Null"],
-      { windowsHide: true, timeout: 5000 });
-  } catch {}
+    { windowsHide: true, timeout: 5000 });
+  } catch { /* ayar yine de uygulanir, sadece tarayicilar gec gorur */ }
+}
+
+function tryExec(cmd, args) {
+  try {
+    return execFileSync(cmd, args, { timeout: 2000, stdio: ["ignore", "pipe", "pipe"] }).toString().trim();
+  } catch {
+    return null;
+  }
+}
+
+function readPrevProxy() {
+  try {
+    return JSON.parse(fs.readFileSync(proxyPrevPath(), "utf8"));
+  } catch {
+    return null;
+  }
 }
 
 function applySystemProxy() {
   if (proxyArmed) return;
+  const local = `127.0.0.1:${LOCAL_PORT}`;
   if (process.platform === "win32") {
-    const key = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings";
-    const prev = { enable: "0", server: "" };
-    const qe = winReg(["query", key, "/v", "ProxyEnable"]);
-    const m = qe.match(/ProxyEnable\\s+REG_DWORD\\s+0x([0-9a-f]+)/i);
-    if (m) prev.enable = String(parseInt(m[1], 16));
-    const qs = winReg(["query", key, "/v", "ProxyServer"]);
-    const s = qs.match(/ProxyServer\\s+REG_SZ\\s+(.+)/i);
-    if (s) prev.server = s[1].trim();
-    try { fs.writeFileSync(proxyPrevPath(), JSON.stringify(prev)); } catch {}
-    winReg(["add", key, "/v", "ProxyEnable", "/t", "REG_DWORD", "/d", "1", "/f"]);
-    winReg(["add", key, "/v", "ProxyServer", "/t", "REG_SZ", "/d", "127.0.0.1:" + LOCAL_PORT, "/f"]);
+    // Onceki degerleri yalnizca ilk kez sakla (cokme sonrasi bizim degerlerimizi "onceki" sanmamak icin).
+    if (!readPrevProxy()) {
+      const prev = {
+        platform: "win32",
+        ProxyEnable: winRegGet("ProxyEnable"),
+        ProxyServer: winRegGet("ProxyServer"),
+        ProxyOverride: winRegGet("ProxyOverride"),
+        AutoConfigURL: winRegGet("AutoConfigURL"),
+      };
+      writeAtomic(proxyPrevPath(), JSON.stringify(prev));
+    }
+    winRegSet("ProxyEnable", "REG_DWORD", 1);
+    winRegSet("ProxyServer", "REG_SZ", local);
+    winRegSet("ProxyOverride", "REG_SZ", WIN_BYPASS);
+    // PAC betigi elle girilen proxy'den once gelir; bagli kaldigimiz surece kaldir.
+    winRegSet("AutoConfigURL", "REG_SZ", null);
     refreshWinInet();
     proxyArmed = true;
     return;
   }
-  // Linux desteği: GNOME, KDE Plasma ve XFCE/Pardus
-  try {
-    // 1. GNOME / Cinnamon
-    execFileSync("gsettings", ["set", "org.gnome.system.proxy", "mode", "manual"], { timeout: 2000 });
-    execFileSync("gsettings", ["set", "org.gnome.system.proxy.http", "host", "127.0.0.1"], { timeout: 2000 });
-    execFileSync("gsettings", ["set", "org.gnome.system.proxy.http", "port", String(LOCAL_PORT)], { timeout: 2000 });
-    execFileSync("gsettings", ["set", "org.gnome.system.proxy.https", "host", "127.0.0.1"], { timeout: 2000 });
-    execFileSync("gsettings", ["set", "org.gnome.system.proxy.https", "port", String(LOCAL_PORT)], { timeout: 2000 });
-    execFileSync("gsettings", ["set", "org.gnome.system.proxy.socks", "host", "127.0.0.1"], { timeout: 2000 });
-    execFileSync("gsettings", ["set", "org.gnome.system.proxy.socks", "port", String(LOCAL_PORT)], { timeout: 2000 });
-    execFileSync("gsettings", ["set", "org.gnome.system.proxy", "ignore-hosts", "['localhost', '127.0.0.0/8', '::1']"], { timeout: 2000 });
+
+  if (!readPrevProxy()) {
+    const prev = { platform: process.platform, gnome: null, kde5: null, kde6: null };
+    const mode = tryExec("gsettings", ["get", "org.gnome.system.proxy", "mode"]);
+    if (mode !== null) {
+      prev.gnome = { mode };
+      for (const k of ["http", "https", "socks"]) {
+        prev.gnome[k] = {
+          host: tryExec("gsettings", ["get", `org.gnome.system.proxy.${k}`, "host"]),
+          port: tryExec("gsettings", ["get", `org.gnome.system.proxy.${k}`, "port"]),
+        };
+      }
+      prev.gnome.ignore = tryExec("gsettings", ["get", "org.gnome.system.proxy", "ignore-hosts"]);
+    }
+    for (const v of ["5", "6"]) {
+      const type = tryExec(`kreadconfig${v}`, ["--file", "kioslaverc", "--group", "Proxy Settings", "--key", "ProxyType"]);
+      if (type !== null) {
+        prev[`kde${v}`] = {
+          ProxyType: type,
+          httpProxy: tryExec(`kreadconfig${v}`, ["--file", "kioslaverc", "--group", "Proxy Settings", "--key", "httpProxy"]),
+          httpsProxy: tryExec(`kreadconfig${v}`, ["--file", "kioslaverc", "--group", "Proxy Settings", "--key", "httpsProxy"]),
+        };
+      }
+    }
+    writeAtomic(proxyPrevPath(), JSON.stringify(prev));
+  }
+
+  const gs = (schema, key, value) => tryExec("gsettings", ["set", schema, key, value]);
+  if (gs("org.gnome.system.proxy", "mode", "manual") !== null) {
+    for (const k of ["http", "https", "socks"]) {
+      gs(`org.gnome.system.proxy.${k}`, "host", "127.0.0.1");
+      gs(`org.gnome.system.proxy.${k}`, "port", String(LOCAL_PORT));
+    }
+    gs("org.gnome.system.proxy", "ignore-hosts", "['localhost', '127.0.0.0/8', '::1', '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16']");
     proxyArmed = true;
-  } catch {}
-  try {
-    // 2. KDE Plasma (KDE 5 ve KDE 6)
-    execFileSync("kwriteconfig5", ["--file", "kioslaverc", "--group", "Proxy Settings", "--key", "ProxyType", "1"], { timeout: 2000 });
-    execFileSync("kwriteconfig5", ["--file", "kioslaverc", "--group", "Proxy Settings", "--key", "httpProxy", "http://127.0.0.1:" + LOCAL_PORT], { timeout: 2000 });
-    execFileSync("kwriteconfig5", ["--file", "kioslaverc", "--group", "Proxy Settings", "--key", "httpsProxy", "http://127.0.0.1:" + LOCAL_PORT], { timeout: 2000 });
-    execFileSync("kwriteconfig6", ["--file", "kioslaverc", "--group", "Proxy Settings", "--key", "ProxyType", "1"], { timeout: 2000 });
-    execFileSync("kwriteconfig6", ["--file", "kioslaverc", "--group", "Proxy Settings", "--key", "httpProxy", "http://127.0.0.1:" + LOCAL_PORT], { timeout: 2000 });
-    execFileSync("kwriteconfig6", ["--file", "kioslaverc", "--group", "Proxy Settings", "--key", "httpsProxy", "http://127.0.0.1:" + LOCAL_PORT], { timeout: 2000 });
-    proxyArmed = true;
-  } catch {}
-  // Linux ortam değişkenleri (terminal ve arka plan uygulamaları için)
-  process.env.http_proxy = "http://127.0.0.1:" + LOCAL_PORT;
-  process.env.https_proxy = "http://127.0.0.1:" + LOCAL_PORT;
-  process.env.all_proxy = "socks5://127.0.0.1:" + LOCAL_PORT;
+  }
+  for (const v of ["5", "6"]) {
+    const kw = (key, value) => tryExec(`kwriteconfig${v}`, ["--file", "kioslaverc", "--group", "Proxy Settings", "--key", key, value]);
+    if (kw("ProxyType", "1") !== null) {
+      kw("httpProxy", `http://${local}`);
+      kw("httpsProxy", `http://${local}`);
+      proxyArmed = true;
+    }
+  }
+  process.env.http_proxy = `http://${local}`;
+  process.env.https_proxy = `http://${local}`;
+  process.env.all_proxy = `socks5://${local}`;
+  proxyArmed = true;
 }
 
 function clearSystemProxy() {
+  const prev = readPrevProxy();
+  if (!prev && !proxyArmed) return;
   if (process.platform === "win32") {
-    const key = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings";
-    let prev = { enable: "0", server: "" };
-    try { prev = JSON.parse(fs.readFileSync(proxyPrevPath(), "utf8")); } catch {}
-    winReg(["add", key, "/v", "ProxyEnable", "/t", "REG_DWORD", "/d", prev.enable || "0", "/f"]);
-    if (prev.server) winReg(["add", key, "/v", "ProxyServer", "/t", "REG_SZ", "/d", prev.server, "/f"]);
-    else winReg(["delete", key, "/v", "ProxyServer", "/f"]);
-    try { fs.unlinkSync(proxyPrevPath()); } catch {}
+    const p = prev || {};
+    winRegSet("ProxyEnable", "REG_DWORD", p.ProxyEnable || "0");
+    winRegSet("ProxyServer", "REG_SZ", p.ProxyServer || null);
+    winRegSet("ProxyOverride", "REG_SZ", p.ProxyOverride || null);
+    winRegSet("AutoConfigURL", "REG_SZ", p.AutoConfigURL || null);
     refreshWinInet();
-    proxyArmed = false;
-    return;
+  } else {
+    const p = prev || {};
+    if (p.gnome) {
+      const unq = (v) => String(v || "").replace(/^'|'$/g, "");
+      tryExec("gsettings", ["set", "org.gnome.system.proxy", "mode", unq(p.gnome.mode) || "none"]);
+      for (const k of ["http", "https", "socks"]) {
+        const o = p.gnome[k] || {};
+        if (o.host !== null && o.host !== undefined) tryExec("gsettings", ["set", `org.gnome.system.proxy.${k}`, "host", unq(o.host)]);
+        if (o.port) tryExec("gsettings", ["set", `org.gnome.system.proxy.${k}`, "port", o.port]);
+      }
+      if (p.gnome.ignore) tryExec("gsettings", ["set", "org.gnome.system.proxy", "ignore-hosts", p.gnome.ignore]);
+    } else {
+      tryExec("gsettings", ["set", "org.gnome.system.proxy", "mode", "none"]);
+    }
+    for (const v of ["5", "6"]) {
+      const o = p[`kde${v}`];
+      const kw = (key, value) => tryExec(`kwriteconfig${v}`, ["--file", "kioslaverc", "--group", "Proxy Settings", "--key", key, value]);
+      if (o) {
+        kw("ProxyType", o.ProxyType || "0");
+        kw("httpProxy", o.httpProxy || "");
+        kw("httpsProxy", o.httpsProxy || "");
+      } else {
+        kw("ProxyType", "0");
+      }
+    }
+    delete process.env.http_proxy;
+    delete process.env.https_proxy;
+    delete process.env.all_proxy;
   }
-  if (!proxyArmed) return;
-  try { execFileSync("gsettings", ["set", "org.gnome.system.proxy", "mode", "none"], { timeout: 2000 }); } catch {}
-  try { execFileSync("kwriteconfig5", ["--file", "kioslaverc", "--group", "Proxy Settings", "--key", "ProxyType", "0"], { timeout: 2000 }); } catch {}
-  try { execFileSync("kwriteconfig6", ["--file", "kioslaverc", "--group", "Proxy Settings", "--key", "ProxyType", "0"], { timeout: 2000 }); } catch {}
-  delete process.env.http_proxy;
-  delete process.env.https_proxy;
-  delete process.env.all_proxy;
+  try { fs.unlinkSync(proxyPrevPath()); } catch { /* yok */ }
   proxyArmed = false;
 }
 
-function isIpv4(s) {
-  const p = String(s || "").trim().split(/\s+/)[0];
-  const a = p.split(".");
-  if (a.length !== 4) return "";
-  for (let i = 0; i < 4; i++) {
-    const n = Number(a[i]);
-    if (!Number.isInteger(n) || n < 0 || n > 255) return "";
-  }
-  return p;
-}
+// ---------------------------------------------------------------------------
+// Okul / kurum proxy'si (uplink) tespiti
+// ---------------------------------------------------------------------------
 
 function parseProxyHostPort(raw) {
   if (!raw) return null;
   let s = String(raw).trim().replace(/^["']|["']$/g, "");
-  if (!s || s.indexOf("127.0.0.1") !== -1 || s.indexOf("localhost") !== -1) return null;
+  if (!s) return null;
   try {
-    if (s.indexOf("://") === -1) s = "http://" + s;
+    if (!s.includes("://")) s = `http://${s}`;
     const u = new URL(s);
     if (!u.hostname || u.hostname === "127.0.0.1" || u.hostname === "localhost") return null;
     return { server: u.hostname, server_port: Number(u.port || 8080) };
@@ -276,135 +395,275 @@ function parseProxyHostPort(raw) {
 }
 
 function detectUplink() {
-  const env =
-    process.env.https_proxy ||
-    process.env.HTTPS_PROXY ||
-    process.env.http_proxy ||
-    process.env.HTTP_PROXY ||
-    process.env.all_proxy ||
-    process.env.ALL_PROXY;
+  const env = process.env.HTTPS_PROXY || process.env.HTTP_PROXY || process.env.ALL_PROXY;
   const fromEnv = parseProxyHostPort(env);
   if (fromEnv) return fromEnv;
+
+  // Biz proxy'yi ayarladiysak gercek (onceki) degerler proxy-prev.json'dadir.
+  const prev = readPrevProxy();
   if (process.platform === "win32") {
-    const key = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings";
-    const qs = winReg(["query", key, "/v", "ProxyServer"]);
-    const m = qs.match(/ProxyServer\\s+REG_SZ\\s+(.+)/i);
-    if (m) {
-      const raw = m[1].trim();
-      const httpsP = raw.match(/https=([^;]+)/i);
-      const httpP = raw.match(/http=([^;]+)/i);
-      return parseProxyHostPort((httpsP && httpsP[1]) || (httpP && httpP[1]) || raw);
-    }
-    return null;
+    const enabled = prev ? prev.ProxyEnable : winRegGet("ProxyEnable");
+    const raw = prev ? prev.ProxyServer : winRegGet("ProxyServer");
+    if (enabled !== "1" || !raw) return null;
+    const httpsP = raw.match(/https=([^;]+)/i);
+    const httpP = raw.match(/http=([^;]+)/i);
+    return parseProxyHostPort((httpsP && httpsP[1]) || (httpP && httpP[1]) || raw);
   }
-  try {
-    const mode = execFileSync("gsettings", ["get", "org.gnome.system.proxy", "mode"], { timeout: 1500 }).toString();
-    if (mode.indexOf("manual") !== -1 || mode.indexOf("auto") !== -1) {
-      const host = execFileSync("gsettings", ["get", "org.gnome.system.proxy.https", "host"], { timeout: 1500 })
-        .toString()
-        .replace(/['"\s]/g, "");
-      const port = execFileSync("gsettings", ["get", "org.gnome.system.proxy.https", "port"], { timeout: 1500 })
-        .toString()
-        .replace(/[^0-9]/g, "");
-      const found = parseProxyHostPort(host + ":" + (port || "8080"));
-      if (found) return found;
-    }
-  } catch {
-    /* no gnome */
+  const g = prev && prev.gnome;
+  const mode = g ? g.mode : tryExec("gsettings", ["get", "org.gnome.system.proxy", "mode"]);
+  if (mode && mode.includes("manual")) {
+    const host = (g ? g.https.host : tryExec("gsettings", ["get", "org.gnome.system.proxy.https", "host"])) || "";
+    const port = (g ? g.https.port : tryExec("gsettings", ["get", "org.gnome.system.proxy.https", "port"])) || "";
+    return parseProxyHostPort(`${host.replace(/['"\s]/g, "")}:${port.replace(/[^0-9]/g, "") || "8080"}`);
   }
   return null;
 }
 
-function probeOne(hostPath) {
-  return new Promise(function (resolve, reject) {
+// ---------------------------------------------------------------------------
+// TLS: ag SSL denetimi (MITM) tespiti
+// ---------------------------------------------------------------------------
+
+// Sunucuya (gerekirse kurum proxy'si uzerinden) TLS ile baglanir.
+// Dogrulamayi biz yapariz: authorized=false ise ag sertifikayi degistiriyordur.
+function openTls(host, port, uplink, cb) {
+  const done = (rawSocket) => {
+    const opts = { host, port, servername: host, rejectUnauthorized: false, ALPNProtocols: ["http/1.1"] };
+    if (rawSocket) opts.socket = rawSocket;
+    cb(null, tls.connect(opts));
+  };
+  if (!uplink) return done(null);
+  const req = http.request({
+    host: uplink.server, port: uplink.server_port, method: "CONNECT", path: `${host}:${port}`,
+    headers: { Host: `${host}:${port}` }, timeout: 10000,
+  });
+  req.on("connect", (res, socket) => {
+    if (res.statusCode !== 200) {
+      socket.destroy();
+      return cb(new Error(`kurum proxy'si reddetti (HTTP ${res.statusCode})`));
+    }
+    done(socket);
+  });
+  req.on("timeout", () => req.destroy(new Error("kurum proxy'si zaman asimi")));
+  req.on("error", (e) => cb(e));
+  req.end();
+}
+
+function chainInfo(socket) {
+  const pins = [];
+  let issuer = "";
+  const seen = new Set();
+  let cert = socket.getPeerCertificate(true);
+  let depth = 0;
+  while (cert && cert.raw && !seen.has(cert.fingerprint256)) {
+    seen.add(cert.fingerprint256);
+    if (depth === 1) issuer = (cert.subject && (cert.subject.CN || cert.subject.O)) || "";
+    if (depth > 0) pins.push(crypto.createHash("sha256").update(cert.raw).digest("hex"));
+    cert = cert.issuerCertificate;
+    depth += 1;
+  }
+  return { pins, issuer };
+}
+
+function recordNetwork(host, socket) {
+  const info = chainInfo(socket);
+  const network = {
+    host,
+    mitm: !socket.authorized,
+    error: socket.authorized ? "" : String(socket.authorizationError || ""),
+    issuer: info.issuer,
+    pins: socket.authorized ? [] : info.pins,
+    checkedAt: new Date().toISOString(),
+  };
+  const store = loadStore();
+  store.network = network;
+  saveStore(store);
+  return network;
+}
+
+function probeNetwork(host) {
+  return new Promise((resolve) => {
+    openTls(host, 443, detectUplink(), (err, socket) => {
+      if (err) return resolve(null);
+      const timer = setTimeout(() => { socket.destroy(); resolve(null); }, 8000);
+      socket.on("secureConnect", () => {
+        clearTimeout(timer);
+        const n = recordNetwork(host, socket);
+        socket.end();
+        resolve(n);
+      });
+      socket.on("error", () => { clearTimeout(timer); resolve(null); });
+    });
+  });
+}
+
+function fetchText(url, timeoutMs = 12000, hops = 0) {
+  return new Promise((resolve, reject) => {
+    if (hops > 5) return reject(new Error("cok fazla yonlendirme"));
+    let u;
+    try {
+      u = new URL(url);
+    } catch (e) {
+      return reject(e);
+    }
+    if (u.protocol !== "https:") return reject(new Error("abonelik linki https:// olmali"));
+    const port = Number(u.port) || 443;
+    openTls(u.hostname, port, detectUplink(), (err, socket) => {
+      if (err) return reject(err);
+      const req = http.request({
+        host: u.hostname, port, path: `${u.pathname}${u.search}`, method: "GET",
+        createConnection: () => socket,
+        headers: { Host: u.host, "User-Agent": `AetherClient/${app.getVersion()}`, Accept: "application/json, text/plain, */*", Connection: "close" },
+        timeout: timeoutMs,
+      }, (res) => {
+        recordNetwork(u.hostname, socket);
+        const loc = res.headers.location;
+        if (res.statusCode >= 300 && res.statusCode < 400 && loc) {
+          res.resume();
+          return fetchText(new URL(loc, url).href, timeoutMs, hops + 1).then(resolve, reject);
+        }
+        let body = "";
+        res.setEncoding("utf8");
+        res.on("data", (c) => {
+          body += c;
+          if (body.length > 2000000) req.destroy(new Error("yanit cok buyuk"));
+        });
+        res.on("end", () => {
+          if (res.statusCode !== 200) return reject(new Error(body.trim().slice(0, 120) || `HTTP ${res.statusCode}`));
+          resolve(body);
+        });
+      });
+      req.on("error", reject);
+      req.on("timeout", () => req.destroy(new Error("zaman asimi")));
+      req.end();
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Abonelik
+// ---------------------------------------------------------------------------
+
+function subscriptionCandidates(url) {
+  const u = new URL(url);
+  const list = [`${u.href}?format=json`];
+  for (const mirror of SUB_MIRRORS) {
+    if (mirror === u.hostname) continue;
+    list.push(`https://${mirror}${u.pathname}?format=json`);
+  }
+  return list;
+}
+
+async function pullSubscription() {
+  const store = loadStore();
+  if (!store.subscription) throw new Error("Abonelik kodu girilmedi");
+  let lastErr = null;
+  for (const url of subscriptionCandidates(store.subscription.url)) {
+    try {
+      const remote = parseSubscription(await fetchText(url));
+      const fresh = loadStore();
+      fresh.profiles = remote.concat(fresh.profiles.filter((p) => p.source === "local"));
+      fresh.remoteAt = new Date().toISOString();
+      saveStore(fresh);
+      return { profiles: fresh.profiles, remoteAt: fresh.remoteAt, network: fresh.network };
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw lastErr || new Error("abonelik alinamadi");
+}
+
+async function setSubscription(input) {
+  const url = normalizeSubscription(input, DEFAULT_SERVER);
+  const store = loadStore();
+  const previous = store.subscription;
+  store.subscription = { url };
+  saveStore(store);
+  try {
+    return await pullSubscription();
+  } catch (e) {
+    const s = loadStore();
+    s.subscription = previous;
+    saveStore(s);
+    throw e;
+  }
+}
+
+function addFromText(raw) {
+  const text = String(raw || "").trim();
+  if (!text) throw new Error("Boş");
+  if (/^https?:\/\//i.test(text) || /^(sub\/)?[A-Za-z0-9_-]{8,64}$/.test(text)) {
+    return setSubscription(text).then((r) => r.profiles);
+  }
+  const store = loadStore();
+  let profile;
+  if (LINK_SCHEMES.some((p) => text.startsWith(p))) {
+    const { name, ob } = parseLink(text);
+    profile = makeProfile(ob, name, "local");
+  } else {
+    const ob = proxyOutboundFromConfig(JSON.parse(text));
+    if (!ob) throw new Error("sing-box JSON içinde sunucu bulunamadı");
+    profile = makeProfile(ob, ob.server, "local");
+  }
+  store.profiles = store.profiles.filter((p) => p.id !== profile.id).concat(profile);
+  saveStore(store);
+  return Promise.resolve(store.profiles);
+}
+
+function isElevated() {
+  if (process.platform === "win32") {
+    try {
+      execFileSync("net", ["session"], { windowsHide: true, stdio: "ignore", timeout: 4000 });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  return typeof process.getuid === "function" && process.getuid() === 0;
+}
+
+// ---------------------------------------------------------------------------
+// Tunel dogrulama
+// ---------------------------------------------------------------------------
+
+function probeOne(url) {
+  return new Promise((resolve, reject) => {
+    const started = Date.now();
     const req = http.request({
-      host: "127.0.0.1",
-      port: LOCAL_PORT,
-      path: hostPath,
-      method: "GET",
-      headers: { Connection: "close", "User-Agent": "Aether" },
-      timeout: 8000,
-    }, function (res) {
+      host: "127.0.0.1", port: LOCAL_PORT, path: url, method: "GET",
+      headers: { Connection: "close", "User-Agent": "Aether" }, timeout: 8000,
+    }, (res) => {
       let d = "";
-      res.on("data", function (c) { d += c; });
-      res.on("end", function () {
-        const ip = isIpv4(d);
-        if (ip) resolve(ip);
+      res.on("data", (c) => { d += c; });
+      res.on("end", () => {
+        const ip = parseIp(d);
+        if (ip) resolve({ ip, ms: Date.now() - started });
         else reject(new Error("ip alinamadi"));
       });
     });
     req.on("error", reject);
-    req.on("timeout", function () { req.destroy(); reject(new Error("tunel zaman asimi")); });
+    req.on("timeout", () => { req.destroy(); reject(new Error("tunel zaman asimi")); });
     req.end();
   });
 }
 
-function probeSocks() {
-  return new Promise(function (resolve, reject) {
-    const sock = net.connect({ host: "127.0.0.1", port: LOCAL_PORT }, function () {
-      sock.write(Buffer.from([0x05, 0x01, 0x00]));
-    });
-    sock.setTimeout(8000);
-    let step = 0;
-    let buf = Buffer.alloc(0);
-    const fail = function (e) {
-      try { sock.destroy(); } catch {}
-      reject(e);
-    };
-    sock.on("data", function (d) {
-      buf = Buffer.concat([buf, d]);
-      if (step === 0 && buf.length >= 2) {
-        if (buf[0] !== 5 || buf[1] !== 0) return fail(new Error("socks"));
-        buf = buf.slice(2);
-        step = 1;
-        const host = Buffer.from("api.ipify.org");
-        const req = Buffer.alloc(7 + host.length);
-        req[0] = 5; req[1] = 1; req[2] = 0; req[3] = 3; req[4] = host.length;
-        host.copy(req, 5);
-        req.writeUInt16BE(80, 5 + host.length);
-        sock.write(req);
-      } else if (step === 1 && buf.length >= 10) {
-        if (buf[1] !== 0) return fail(new Error("socks " + buf[1]));
-        step = 2;
-        sock.write("GET / HTTP/1.1\r\nHost: api.ipify.org\r\nConnection: close\r\n\r\n");
-        buf = Buffer.alloc(0);
-      } else if (step === 2) {
-        const ip = isIpv4(buf.toString("utf8").replace(/^[\s\S]*?\r\n\r\n/, ""));
-        if (ip) {
-          try { sock.destroy(); } catch {}
-          resolve(ip);
-        }
-      }
-    });
-    sock.on("end", function () {
-      if (step === 2) {
-        const ip = isIpv4(buf.toString("utf8").replace(/^[\s\S]*?\r\n\r\n/, ""));
-        if (ip) return resolve(ip);
-      }
-      reject(new Error("ip alinamadi"));
-    });
-    sock.on("error", reject);
-    sock.on("timeout", function () { fail(new Error("tunel zaman asimi")); });
-  });
-}
-
 function probeViaProxy() {
-  return probeOne("http://1.1.1.1/cdn-cgi/trace")
-    .catch(function () { return probeOne("http://api.ipify.org/"); })
-    .catch(function () { return probeOne("http://ipv4.icanhazip.com/"); })
-    .catch(function () { return probeSocks(); });
+  // Not: http://1.1.1.1/cdn-cgi/trace artik https'e yonlendiriyor (301).
+  return probeOne("http://cloudflare.com/cdn-cgi/trace")
+    .catch(() => probeOne("http://ipv4.icanhazip.com/"))
+    .catch(() => probeOne("http://checkip.amazonaws.com/"));
 }
 
-function waitPort(port, ms) {
-  return new Promise(function (resolve, reject) {
+function waitPort(port, ms, proc) {
+  return new Promise((resolve, reject) => {
     const start = Date.now();
-    const once = function () {
-      const s = net.connect({ host: "127.0.0.1", port: port }, function () {
-        try { s.end(); } catch {}
+    const once = () => {
+      if (child !== proc) return reject(new Error("iptal edildi"));
+      const s = net.connect({ host: "127.0.0.1", port }, () => {
+        s.end();
         resolve();
       });
-      s.on("error", function () {
-        if (Date.now() - start > ms) reject(new Error("cekirdek port acilmadi"));
+      s.on("error", () => {
+        if (Date.now() - start > ms) reject(new Error("cekirdek portu acilmadi"));
         else setTimeout(once, 180);
       });
     };
@@ -412,581 +671,126 @@ function waitPort(port, ms) {
   });
 }
 
-async function waitForTunnel() {
+async function waitForTunnel(proc) {
   let last = new Error("tunel yok");
-  try { await waitPort(LOCAL_PORT, 8000); } catch (e) { throw e; }
-  for (let i = 0; i < 16; i++) {
-    await new Promise(function (r) { setTimeout(r, 300 + i * 150); });
-    if (!child) throw new Error("cekirdek durdu");
-    try { return await probeViaProxy(); } catch (e) { last = e; }
+  await waitPort(LOCAL_PORT, 8000, proc);
+  for (let i = 0; i < 12; i++) {
+    if (child !== proc) throw new Error("iptal edildi");
+    try {
+      return await probeViaProxy();
+    } catch (e) {
+      last = e;
+    }
+    await new Promise((r) => setTimeout(r, 300 + i * 150));
   }
   throw last;
 }
 
-function fetchText(url, timeoutMs, hops) {
-  if (!timeoutMs) timeoutMs = 12000;
-  if (!hops) hops = 0;
-  return new Promise(function (resolve, reject) {
-    if (hops > 5) return reject(new Error("redirect"));
-    let u;
-    try { u = new URL(url); } catch (e) { return reject(e); }
-    const isHttps = u.protocol === "https:";
-    const opts = {
-      protocol: u.protocol, hostname: u.hostname, servername: u.hostname,
-      port: Number(u.port) || (isHttps ? 443 : 80),
-      path: (u.pathname || "/") + u.search, method: "GET",
-      headers: { "User-Agent": "AetherClient/1.2", Accept: "application/json, text/plain, */*", Host: u.host, Connection: "close" },
-      timeout: timeoutMs, rejectUnauthorized: false,
-    };
-    if (isHttps) opts.agent = insecureAgent;
-    const lib = isHttps ? https : http;
-    const req = lib.request(opts, function (res) {
-      const loc = res.headers.location;
-      if (res.statusCode >= 300 && res.statusCode < 400 && loc) {
-        res.resume();
-        const next = loc.indexOf("http") === 0 ? loc : new URL(loc, url).href;
-        return fetchText(next, timeoutMs, hops + 1).then(resolve, reject);
-      }
-      if (res.statusCode !== 200) { res.resume(); return reject(new Error("HTTP " + res.statusCode)); }
-      let d = "";
-      res.setEncoding("utf8");
-      res.on("data", function (c) { d += c; if (d.length > 2000000) { req.destroy(); reject(new Error("liste cok buyuk")); } });
-      res.on("end", function () { resolve(d); });
-    });
-    req.on("error", reject);
-    req.on("timeout", function () { req.destroy(); reject(new Error("zaman asimi")); });
-    req.end();
+async function startCore(id, transport) {
+  if (child) stopCore();
+  const seq = ++connectSeq;
+  const store = loadStore();
+  const profile = pickProfile(store, id, transport);
+  const bin = corePath();
+  if (!fs.existsSync(bin)) throw new Error("Çekirdek bulunamadı — GitHub Release paketini kullanın");
+  const isTun = Boolean(store.tunMode);
+  if (isTun && !isElevated()) {
+    const e = new Error(process.platform === "win32"
+      ? "TUN modu yönetici yetkisi ister."
+      : `TUN modu root ister. Alternatif: sudo setcap cap_net_admin,cap_net_bind_service+ep "${bin}"`);
+    e.code = "NEED_ADMIN";
+    throw e;
+  }
+
+  // Bu agda sunucu sertifikasi dogrulanabiliyor mu? (MEB FATIH gibi SSL denetimi yapan aglarda hayir)
+  const sni = (profile.outbound.tls && profile.outbound.tls.server_name) || profile.outbound.server;
+  const network = await probeNetwork(sni);
+  const insecure = !network || network.mitm;
+  if (seq !== connectSeq) throw new Error("iptal edildi");
+
+  const cfg = buildCoreConfig(profile.outbound, { tun: isTun, insecure, uplink: detectUplink(), localPort: LOCAL_PORT });
+  const cfgPath = dataPath("active.json");
+  writeAtomic(cfgPath, JSON.stringify(cfg, null, 2));
+
+  const proc = spawn(bin, ["run", "-c", cfgPath], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+  child = proc;
+  activeId = id;
+  tunActive = isTun;
+  try { fs.writeFileSync(pidPath(), String(proc.pid)); } catch { /* yok */ }
+  let errBuf = "";
+  const collect = (d) => {
+    errBuf += d.toString();
+    if (errBuf.length > 4000) errBuf = errBuf.slice(-2000);
+  };
+  proc.stderr.on("data", collect);
+  proc.stdout.on("data", collect);
+  proc.on("exit", (code) => {
+    if (child !== proc) return;
+    child = null;
+    activeId = null;
+    lastExitIp = "";
+    tunActive = false;
+    try { fs.unlinkSync(pidPath()); } catch { /* yok */ }
+    clearSystemProxy();
+    send("status", statusPayload({ lastError: code ? friendlyErr(stripAnsi(errBuf) || `cikis ${code}`) : "" }));
   });
+
+  try {
+    const r = await waitForTunnel(proc);
+    if (child !== proc) throw new Error("iptal edildi");
+    lastExitIp = r.ip;
+    lastLatencyMs = r.ms;
+    if (!isTun) applySystemProxy();
+    const payload = statusPayload({ activeId: profile.id });
+    activeId = profile.id;
+    send("status", payload);
+    return payload;
+  } catch (e) {
+    if (child !== proc) throw new Error("iptal edildi");
+    const raw = stripAnsi(errBuf);
+    stopCore();
+    throw new Error(raw ? `${friendlyErr(raw)} | ${raw.slice(-240)}` : friendlyErr(e));
+  }
 }
 
 function stripAnsi(s) {
   return String(s || "").replace(/\u001b\[[0-9;]*[A-Za-z]/g, "").replace(/\s+/g, " ").trim();
 }
 
-function hardenTls(tlsObj, sni, isGrpc) {
-  const next = Object.assign({}, tlsObj || { enabled: true });
-  next.enabled = true;
-  next.insecure = true;
-  if (sni) next.server_name = sni;
-  else if (!next.server_name) next.server_name = "vpn.geldesat.com";
-  next.utls = {
-    enabled: true,
-    fingerprint: "chrome",
-  };
-  if (isGrpc) {
-    next.alpn = ["h2", "http/1.1"];
-  } else {
-    next.alpn = ["http/1.1"];
-  }
-  delete next.disable_sni;
-  return next;
-}
+// ---------------------------------------------------------------------------
+// Tarayici (ayri profil ile; acik Chrome --proxy-server'i yok sayar)
+// ---------------------------------------------------------------------------
 
-function migrateConfig(cfg) {
-  if (!cfg || typeof cfg !== "object") return cfg;
-  const next = JSON.parse(JSON.stringify(cfg));
-  next.log = { level: "warn", timestamp: true };
-  next.dns = {
-    servers: [{ address: "local", tag: "local" }],
-    strategy: "ipv4_only",
-  };
-  if (Array.isArray(next.outbounds)) {
-    next.outbounds = next.outbounds
-      .filter(function (o) { return o && o.type !== "block" && o.type !== "dns" && o.type !== "direct"; })
-      .map(function (o) {
-        const patched = Object.assign({}, o);
-        delete patched.domain_resolver;
-        const isGrpc = Boolean(patched.transport && patched.transport.type === "grpc");
-        if (patched.type === "vless") {
-          patched.tls = hardenTls(patched.tls, (patched.tls && patched.tls.server_name) || patched.server, isGrpc);
-          if (!patched.network) patched.network = "tcp";
-        } else if (patched.tls) {
-          patched.tls = hardenTls(patched.tls, (patched.tls && patched.tls.server_name) || patched.server, isGrpc);
-        }
-        return patched;
-      });
-  }
-  next.route = {
-    rules: [
-      {
-        domain_suffix: [
-          ".gov.tr",
-          ".meb.gov.tr",
-          ".eba.gov.tr",
-          ".edu.tr"
-        ],
-        outbound: "direct"
-      }
-    ],
-    final: "proxy"
-  };
-  if (!next.outbounds.some(function (o) { return o.tag === "direct"; })) {
-    next.outbounds.push({ type: "direct", tag: "direct" });
-  }
-  if (!Array.isArray(next.inbounds) || !next.inbounds.length) {
-    next.inbounds = [{ type: "mixed", tag: "mixed-in", listen: "127.0.0.1", listen_port: LOCAL_PORT }];
-  }
-  return next;
-}
-
-function singboxFromTrojan(link) {
-  const u = new URL(link.trim());
-  if (u.protocol !== "trojan:") throw new Error("trojan:// bekleniyor");
-  const pass = decodeURIComponent(u.username);
-  const host = u.hostname;
-  const port = Number(u.port || 443);
-  const q = u.searchParams;
-  const name = decodeURIComponent(u.hash.replace(/^#/, "")) || (host + " (Trojan)");
-  const type = (q.get("type") || "ws").toLowerCase();
-  const sni = q.get("sni") || host;
-  const isGrpc = (type === "grpc");
-
-  let transportObj = {};
-  if (isGrpc) {
-    transportObj = {
-      type: "grpc",
-      service_name: q.get("serviceName") || "aether-grpc-trpc",
-      idle_timeout: "15s",
-      ping_timeout: "15s",
-      permit_without_stream: true,
-    };
-  } else if (type === "httpupgrade") {
-    transportObj = {
-      type: "httpupgrade",
-      host: q.get("host") || host,
-      path: decodeURIComponent(q.get("path") || "/"),
-    };
-  } else {
-    transportObj = {
-      type: "ws",
-      path: decodeURIComponent(q.get("path") || "/"),
-      headers: { Host: q.get("host") || host },
-    };
-  }
-
-  return {
-    name: name,
-    domain: host,
-    config: migrateConfig({
-      inbounds: [{ type: "mixed", tag: "mixed-in", listen: "127.0.0.1", listen_port: LOCAL_PORT }],
-      outbounds: [{
-        type: "trojan", tag: "proxy", server: host, server_port: port, password: pass,
-        tls: hardenTls({ enabled: true }, sni, isGrpc),
-        transport: transportObj,
-      }],
-    }),
-  };
-}
-
-function singboxFromVmess(link) {
-  const raw = link.trim().replace(/^vmess:\/\//i, "");
-  const jsonStr = Buffer.from(raw, "base64").toString("utf8");
-  const d = JSON.parse(jsonStr);
-
-  const host = d.add;
-  const port = Number(d.port || 443);
-  const uuid = d.id;
-  const net = (d.net || "ws").toLowerCase();
-  const sni = d.sni || host;
-  const name = d.ps || (host + " (VMess)");
-  const isGrpc = (net === "grpc");
-
-  let transportObj = {};
-  if (isGrpc) {
-    transportObj = {
-      type: "grpc",
-      service_name: d.path || "aether-grpc-vmpc",
-      idle_timeout: "15s",
-      ping_timeout: "15s",
-      permit_without_stream: true,
-    };
-  } else if (net === "httpupgrade") {
-    transportObj = {
-      type: "httpupgrade",
-      host: d.host || host,
-      path: d.path || "/",
-    };
-  } else {
-    transportObj = {
-      type: "ws",
-      path: d.path || "/",
-      headers: { Host: d.host || host },
-    };
-  }
-
-  return {
-    name: name,
-    domain: host,
-    config: migrateConfig({
-      inbounds: [{ type: "mixed", tag: "mixed-in", listen: "127.0.0.1", listen_port: LOCAL_PORT }],
-      outbounds: [{
-        type: "vmess",
-        tag: "proxy",
-        server: host,
-        server_port: port,
-        uuid: uuid,
-        security: d.scy || "auto",
-        alter_id: Number(d.aid || 0),
-        tls: hardenTls({ enabled: Boolean(d.tls) }, sni, isGrpc),
-        transport: transportObj,
-      }],
-    }),
-  };
-}
-
-function singboxFromVless(link) {
-  const u = new URL(link.trim());
-  if (u.protocol !== "vless:") throw new Error("vless:// bekleniyor");
-  const uuid = decodeURIComponent(u.username);
-  const host = u.hostname;
-  const port = Number(u.port || 443);
-  const q = u.searchParams;
-  const name = decodeURIComponent(u.hash.replace(/^#/, "")) || host;
-  const type = (q.get("type") || "ws").toLowerCase();
-  const sni = q.get("sni") || host;
-  
-  let transportObj = {};
-  const isGrpc = (type === "grpc");
-  if (isGrpc) {
-    transportObj = {
-      type: "grpc",
-      service_name: q.get("serviceName") || "aether-grpc",
-      idle_timeout: "15s",
-      ping_timeout: "15s",
-      permit_without_stream: true,
-    };
-  } else if (type === "httpupgrade") {
-    const upgPath = decodeURIComponent(q.get("path") || "/");
-    const upgHost = q.get("host") || host;
-    transportObj = {
-      type: "httpupgrade",
-      host: upgHost,
-      path: upgPath,
-      headers: { Host: upgHost },
-    };
-  } else {
-    const wsPath = decodeURIComponent(q.get("path") || "/");
-    const wsHost = q.get("host") || host;
-    transportObj = {
-      type: "ws",
-      path: wsPath,
-      headers: { Host: wsHost },
-    };
-  }
-
-  return {
-    name: name,
-    domain: host,
-    config: migrateConfig({
-      inbounds: [{ type: "mixed", tag: "mixed-in", listen: "127.0.0.1", listen_port: LOCAL_PORT }],
-      outbounds: [{
-        type: "vless", tag: "proxy", server: host, server_port: port, uuid: uuid,
-        packet_encoding: "xudp",
-        tls: hardenTls({ enabled: true }, sni, isGrpc),
-        transport: transportObj,
-      }],
-    }),
-  };
-}
-
-function domainFromConfig(cfg) {
-  const o = (cfg.outbounds || []).find(function (x) { return x.server; });
-  return o ? o.server : "aether";
-}
-
-function itemToProfile(item, i) {
-  if (typeof item === "string") {
-    let parsed;
-    if (item.indexOf("trojan://") === 0) parsed = singboxFromTrojan(item);
-    else if (item.indexOf("vmess://") === 0) parsed = singboxFromVmess(item);
-    else parsed = singboxFromVless(item);
-    return { id: "remote-" + i + "-" + parsed.domain, name: parsed.name, domain: parsed.domain, config: parsed.config, source: "remote" };
-  }
-  if (item && item.vless) {
-    const parsed = singboxFromVless(item.vless);
-    return { id: "remote-" + i + "-" + parsed.domain, name: item.name || parsed.name, domain: parsed.domain, config: parsed.config, source: "remote" };
-  }
-  if (item && item.trojan) {
-    const parsed = singboxFromTrojan(item.trojan);
-    return { id: "remote-" + i + "-" + parsed.domain, name: item.name || parsed.name, domain: parsed.domain, config: parsed.config, source: "remote" };
-  }
-  if (item && item.vmess) {
-    const parsed = singboxFromVmess(item.vmess);
-    return { id: "remote-" + i + "-" + parsed.domain, name: item.name || parsed.name, domain: parsed.domain, config: parsed.config, source: "remote" };
-  }
-  if (item && item.config && item.config.outbounds) {
-    return { id: "remote-" + i + "-" + domainFromConfig(item.config), name: item.name || domainFromConfig(item.config), domain: domainFromConfig(item.config), config: item.config, source: "remote" };
-  }
-  throw new Error("dugum okunamadi");
-}
-
-function parseVlist(text) {
-  let t = String(text || "").trim();
-  if (!t) throw new Error("liste bos");
-
-  // Base64 abonelik formatı ise decode et (/sub/:token çıktısı)
-  if (!t.startsWith("{") && !t.startsWith("[") && !t.includes("://")) {
-    try {
-      const decoded = Buffer.from(t, "base64").toString("utf8");
-      if (decoded.includes("://")) {
-        t = decoded.trim();
-      }
-    } catch {}
-  }
-
-  // Satır satır URL listesi (vless://, trojan://, vmess://)
-  if (t.indexOf("vless://") === 0 || t.indexOf("trojan://") === 0 || t.indexOf("vmess://") === 0) {
-    return t.split(/\r?\n/).map(function (l) { return l.trim(); }).filter(function (l) {
-      return (l.indexOf("vless://") === 0 || l.indexOf("trojan://") === 0 || l.indexOf("vmess://") === 0) && l.indexOf("#") !== 0;
-    });
-  }
-
-  // JSON formatı
-  const j = JSON.parse(t);
-  if (Array.isArray(j)) return j;
-  if (j.nodes) return j.nodes;
-  if (j.links && Array.isArray(j.links)) {
-    return j.links.map(function (link) {
-      if (link.indexOf("trojan://") === 0) return { trojan: link };
-      if (link.indexOf("vmess://") === 0) return { vmess: link };
-      return { vless: link };
-    });
-  }
-  if (j.vless || j.trojan || j.vmess || j.config) return [j];
-  throw new Error("list.json bicimi hatali");
-}
-
-function applyRemote(items) {
-  const remote = items.map(function (it, i) { return itemToProfile(it, i); });
-  if (!remote.length) throw new Error("dugum yok");
-  const store = loadStore();
-  const local = (store.profiles || []).filter(function (p) { return p.source === "local"; });
-  store.profiles = remote.concat(local);
-  store.remoteAt = new Date().toISOString();
-  saveStore(store);
-  return { profiles: store.profiles, remoteAt: store.remoteAt };
-}
-
-function applyFallback() {
-  return applyRemote([FALLBACK_VLESS]);
-}
-
-async function pullVlist() {
-  let lastErr = null;
-  for (let i = 0; i < VLIST_URLS.length; i++) {
-    try {
-      const text = await fetchText(VLIST_URLS[i]);
-      return applyRemote(parseVlist(text));
-    } catch (e) { lastErr = e; }
-  }
-  try { return applyFallback(); } catch { throw lastErr || new Error("liste alinamadi"); }
-}
-
-async function addFromText(raw) {
-  const text = String(raw || "").trim();
-  if (!text) throw new Error("Bos");
-  const store = loadStore();
-
-  // 1. Abonelik URL'si eklendiyse (örn: https://vpn.geldesat.com/sub/admin veya list.json)
-  if (text.indexOf("http://") === 0 || text.indexOf("https://") === 0) {
-    const rawFetched = await fetchText(text);
-    const parsedItems = parseVlist(rawFetched);
-    const newProfiles = parsedItems.map(function (it, idx) {
-      const prof = itemToProfile(it, idx);
-      prof.id = "sub-" + Date.now() + "-" + idx;
-      prof.source = "local";
-      return prof;
-    });
-    if (!newProfiles.length) throw new Error("Abonelikte aktif profil bulunamadı");
-    store.profiles = (store.profiles || []).concat(newProfiles);
-    saveStore(store);
-    return store.profiles;
-  }
-
-  // 2. Token veya sub/token girildiyse (örn: "admin" veya "sub/admin")
-  if (!text.includes("://") && !text.startsWith("{") && !text.includes("\n") && text.length < 64) {
-    const cleanToken = text.replace(/^sub\//, "").trim();
-    try {
-      const tokenUrl = "https://vpn.geldesat.com/sub/" + encodeURIComponent(cleanToken) + "?format=json";
-      const rawFetched = await fetchText(tokenUrl);
-      const parsedItems = parseVlist(rawFetched);
-      const newProfiles = parsedItems.map(function (it, idx) {
-        const prof = itemToProfile(it, idx);
-        prof.id = "sub-" + Date.now() + "-" + idx;
-        prof.source = "local";
-        return prof;
-      });
-      if (newProfiles.length) {
-        store.profiles = (store.profiles || []).concat(newProfiles);
-        saveStore(store);
-        return store.profiles;
-      }
-    } catch {}
-  }
-
-  // 3. Tekil protokol URI veya JSON yapılandırması
-  let profile;
-  if (text.indexOf("vless://") === 0) {
-    const parsed = singboxFromVless(text);
-    profile = { id: "local-" + Date.now(), name: parsed.name, domain: parsed.domain, config: parsed.config, source: "local" };
-  } else if (text.indexOf("trojan://") === 0) {
-    const parsed = singboxFromTrojan(text);
-    profile = { id: "local-" + Date.now(), name: parsed.name, domain: parsed.domain, config: parsed.config, source: "local" };
-  } else if (text.indexOf("vmess://") === 0) {
-    const parsed = singboxFromVmess(text);
-    profile = { id: "local-" + Date.now(), name: parsed.name, domain: parsed.domain, config: parsed.config, source: "local" };
-  } else {
-    const cfg = JSON.parse(text);
-    if (!cfg.outbounds) throw new Error("sing-box JSON degil");
-    profile = { id: "local-" + Date.now(), name: domainFromConfig(cfg), domain: domainFromConfig(cfg), config: cfg, source: "local" };
-  }
-  store.profiles.push(profile);
-  saveStore(store);
-  return store.profiles;
-}
-
-async function startCore(id, protoOverride) {
-  if (child) stopCore();
-  const store = loadStore();
-  const profile = store.profiles.find(function (p) { return p.id === id; });
-  if (!profile) throw new Error("Dugum yok");
-  const bin = corePath();
-  if (!fs.existsSync(bin)) throw new Error("Cekirdek yok — GitHub Release paketini kullan");
-  const cfgPath = path.join(app.getPath("userData"), "active.json");
-  const isTun = Boolean(store.tunMode);
-  const cfg = migrateConfig(profile.config);
-
-  // İstemciden protokol seçildiyse dinamik override yap:
-  if (Array.isArray(cfg.outbounds)) {
-    cfg.outbounds.forEach(function (o) {
-      if (!o || (o.type !== "vless" && o.type !== "trojan" && o.type !== "vmess")) return;
-      const hostDomain = o.server || "vpn.geldesat.com";
-      const existingTrans = o.transport || {};
-      const currentPath = existingTrans.path || "/";
-
-      if (protoOverride === "grpc") {
-        let svc = existingTrans.service_name || "aether-grpc";
-        if (o.type === "trojan" && !svc.endsWith("-trpc")) svc += "-trpc";
-        if (o.type === "vmess" && !svc.endsWith("-vmpc")) svc += "-vmpc";
-        o.transport = {
-          type: "grpc",
-          service_name: svc,
-          idle_timeout: "15s",
-          ping_timeout: "15s",
-          permit_without_stream: true,
-        };
-        o.tls = hardenTls(o.tls, (o.tls && o.tls.server_name) || hostDomain, true);
-      } else if (protoOverride === "upg") {
-        let upgPath = currentPath;
-        if (o.type === "trojan") upgPath = "/aether-trup";
-        else if (o.type === "vmess") upgPath = "/aether-vmup";
-        else upgPath = currentPath.endsWith("-upg") ? currentPath : (currentPath.replace(/\/$/, "") + "-upg");
-
-        o.transport = {
-          type: "httpupgrade",
-          host: hostDomain,
-          path: upgPath,
-          headers: { Host: hostDomain },
-        };
-        o.tls = hardenTls(o.tls, (o.tls && o.tls.server_name) || hostDomain, false);
-      } else if (protoOverride === "ws") {
-        let wsPath = "/aether";
-        if (o.type === "trojan") wsPath = "/aether-trws";
-        else if (o.type === "vmess") wsPath = "/aether-vmess";
-        else wsPath = currentPath.replace(/-upg$/, "");
-
-        o.transport = {
-          type: "ws",
-          path: wsPath || "/",
-          headers: { Host: hostDomain },
-        };
-        o.tls = hardenTls(o.tls, (o.tls && o.tls.server_name) || hostDomain, false);
-      }
-    });
-  }
-
-  if (isTun) {
-    tunActive = true;
-    cfg.inbounds = [
-      {
-        type: "tun",
-        tag: "tun-in",
-        interface_name: "aether-tun",
-        address: ["172.19.0.1/30"],
-        auto_route: true,
-        strict_route: false,
-        stack: "system",
-        sniff: true,
-      },
-      {
-        type: "mixed",
-        tag: "mixed-in",
-        listen: "127.0.0.1",
-        listen_port: LOCAL_PORT,
-      },
+function findBrowser() {
+  if (process.platform === "win32") {
+    const env = process.env;
+    const candidates = [
+      path.join(env.PROGRAMFILES || "C:\\Program Files", "Google\\Chrome\\Application\\chrome.exe"),
+      path.join(env["PROGRAMFILES(X86)"] || "C:\\Program Files (x86)", "Google\\Chrome\\Application\\chrome.exe"),
+      path.join(env.LOCALAPPDATA || "", "Google\\Chrome\\Application\\chrome.exe"),
+      path.join(env["PROGRAMFILES(X86)"] || "C:\\Program Files (x86)", "Microsoft\\Edge\\Application\\msedge.exe"),
+      path.join(env.PROGRAMFILES || "C:\\Program Files", "Microsoft\\Edge\\Application\\msedge.exe"),
     ];
-    cfg.dns = {
-      servers: [
-        { tag: "remote", address: "https://1.1.1.1/dns-query", detour: "proxy" },
-        { tag: "local", address: "local", detour: "direct" },
-      ],
-      strategy: "prefer_ipv4",
-    };
-  } else {
-    tunActive = false;
-    if (Array.isArray(cfg.inbounds)) {
-      cfg.inbounds = cfg.inbounds.map(function (ib) {
-        if (!ib || ib.type !== "mixed") return ib;
-        return Object.assign({}, ib, { listen: "127.0.0.1", listen_port: LOCAL_PORT });
-      });
-    }
+    return candidates.find((p) => p && fs.existsSync(p)) || null;
   }
-
-  const uplink = detectUplink();
-  if (uplink && Array.isArray(cfg.outbounds)) {
-    cfg.outbounds = cfg.outbounds.map(function (o) {
-      if (o && o.type === "vless") return Object.assign({}, o, { detour: "uplink" });
-      return o;
-    });
-    cfg.outbounds.push({ type: "http", tag: "uplink", server: uplink.server, server_port: uplink.server_port });
+  for (const b of ["google-chrome-stable", "google-chrome", "chromium-browser", "chromium", "brave-browser", "microsoft-edge"]) {
+    const found = tryExec("which", [b]);
+    if (found) return found;
   }
-  fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2));
-  const proc = spawn(bin, ["run", "-c", cfgPath], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true, detached: false });
-  child = proc;
-  activeId = id;
-  try { fs.writeFileSync(pidPath(), String(proc.pid)); } catch {}
-  let errBuf = "";
-  proc.stderr.on("data", function (d) { errBuf += d.toString(); if (errBuf.length > 4000) errBuf = errBuf.slice(-2000); });
-  proc.on("exit", function (code) {
-    if (child === proc) {
-      child = null; activeId = null; lastExitIp = ""; tunActive = false;
-      try { fs.unlinkSync(pidPath()); } catch {}
-      clearSystemProxy();
-      send("status", statusPayload({ lastError: code ? friendlyErr(stripAnsi(errBuf) || "cikis " + code) : "" }));
-    }
-  });
-  try {
-    lastExitIp = await waitForTunnel();
-    if (!isTun) {
-      applySystemProxy();
-    }
-    send("status", statusPayload());
-    return statusPayload();
-  } catch (e) {
-    const raw = stripAnsi(errBuf);
-    const msg = friendlyErr(raw || e.message || "tunel kurulamadi");
-    stopCore();
-    throw new Error(raw ? (msg + " | " + raw.slice(-240)) : msg);
-  }
+  return null;
 }
+
+// ---------------------------------------------------------------------------
+// Pencere / tepsi
+// ---------------------------------------------------------------------------
 
 function createWindow() {
   const ico = iconFile();
   const opts = {
-    width: 420, height: 700, minWidth: 400, minHeight: 640,
+    width: 420, height: 720, minWidth: 400, minHeight: 640,
     backgroundColor: "#0c0c0e", autoHideMenuBar: true, title: "Aether", show: false,
     icon: fs.existsSync(ico) ? ico : undefined,
-    webPreferences: { preload: path.join(__dirname, "preload.js"), contextIsolation: true, nodeIntegration: false },
+    webPreferences: { preload: path.join(__dirname, "preload.js"), contextIsolation: true, nodeIntegration: false, sandbox: true },
   };
   if (process.platform === "win32") {
     opts.titleBarStyle = "hidden";
@@ -996,8 +800,23 @@ function createWindow() {
   }
   win = new BrowserWindow(opts);
   win.loadFile(path.join(__dirname, "renderer", "index.html"));
-  win.once("ready-to-show", function () { win.show(); });
-  win.on("close", function () { stopCore(); });
+  win.once("ready-to-show", () => win.show());
+  win.on("close", () => stopCore());
+  // Windows oturum kapanisi/yeniden baslatma: proxy kayit defterinde kalmasin.
+  win.on("session-end", () => shutdownAll());
+  win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  win.webContents.on("will-navigate", (e) => e.preventDefault());
+}
+
+function updateTrayMenu() {
+  if (!tray) return;
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: child ? "Bağlı" : "Bağlı değil", enabled: false },
+    { label: "Göster", click: () => { if (win) { win.show(); win.focus(); } } },
+    { label: "Bağlantıyı kes", enabled: Boolean(child), click: () => stopCore() },
+    { type: "separator" },
+    { label: "Çıkış", click: () => { shutdownAll(); app.quit(); } },
+  ]));
 }
 
 function createTray() {
@@ -1005,19 +824,9 @@ function createTray() {
   let img = fs.existsSync(ico) ? nativeImage.createFromPath(ico) : nativeImage.createEmpty();
   if (!img.isEmpty()) img = img.resize({ width: 16, height: 16 });
   tray = new Tray(img);
-  const menu = function () {
-    return Menu.buildFromTemplate([
-      { label: child ? "Bagli" : "Kesik", enabled: false },
-      { label: "Goster", click: function () { if (win) { win.show(); win.focus(); } } },
-      { label: "Kes", click: function () { stopCore(); } },
-      { type: "separator" },
-      { label: "Cik", click: function () { quitting = true; stopCore(); app.quit(); } },
-    ]);
-  };
   tray.setToolTip("Aether");
-  tray.setContextMenu(menu());
-  tray.on("click", function () { if (win) { win.show(); win.focus(); } });
-  setInterval(function () { try { tray.setContextMenu(menu()); } catch {} }, 2500);
+  tray.on("click", () => { if (win) { win.show(); win.focus(); } });
+  updateTrayMenu();
 }
 
 function shutdownAll() {
@@ -1026,16 +835,15 @@ function shutdownAll() {
   stopCore();
 }
 
-app.on("certificate-error", function (event, _wc, _url, _error, _cert, callback) {
-  event.preventDefault();
-  callback(true);
-});
+// ---------------------------------------------------------------------------
+// Uygulama yasam dongusu
+// ---------------------------------------------------------------------------
 
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
 } else {
-  app.on("second-instance", function () {
+  app.on("second-instance", () => {
     if (win) {
       if (win.isMinimized()) win.restore();
       win.show();
@@ -1044,70 +852,105 @@ if (!gotLock) {
   });
 }
 
-app.whenReady().then(function () {
+app.whenReady().then(() => {
   killStale();
-  try { if (fs.existsSync(proxyPrevPath())) clearSystemProxy(); } catch {}
+  // Onceki oturum cokmus/kapanmissa sistem proxy'sini geri yukle.
+  try { if (fs.existsSync(proxyPrevPath())) clearSystemProxy(); } catch { /* yok */ }
   createWindow();
   createTray();
-  pullVlist().then(function (r) { send("vlist", r); }).catch(function (e) { send("vlist-error", { message: friendlyErr(e) }); });
-});
-
-app.on("window-all-closed", function () { stopCore(); app.quit(); });
-app.on("before-quit", shutdownAll);
-app.on("will-quit", shutdownAll);
-app.on("quit", shutdownAll);
-try { powerMonitor.on("shutdown", shutdownAll); } catch {}
-process.on("SIGINT", function () { shutdownAll(); app.quit(); });
-process.on("SIGTERM", function () { shutdownAll(); app.quit(); });
-process.on("exit", function () { if (child && child.pid) killPid(child.pid); });
-
-ipcMain.handle("state", function () {
   const store = loadStore();
-  return Object.assign(statusPayload(), { profiles: store.profiles, locale: store.locale || "tr", remoteAt: store.remoteAt || null });
+  saveStore(store);
+  if (store.subscription) {
+    pullSubscription()
+      .then((r) => send("vlist", r))
+      .catch((e) => send("vlist-error", { message: friendlyErr(e) }));
+  }
 });
-ipcMain.handle("set-locale", function (_e, locale) {
+
+app.on("window-all-closed", () => { shutdownAll(); app.quit(); });
+app.on("before-quit", shutdownAll);
+try { powerMonitor.on("shutdown", shutdownAll); } catch { /* desteklenmiyor */ }
+process.on("SIGINT", () => { shutdownAll(); app.quit(); });
+process.on("SIGTERM", () => { shutdownAll(); app.quit(); });
+process.on("uncaughtException", (e) => {
+  console.error(e);
+  try { stopCore(); } catch { /* yok */ }
+});
+
+// ---------------------------------------------------------------------------
+// IPC
+// ---------------------------------------------------------------------------
+
+ipcMain.handle("state", () => {
+  const store = loadStore();
+  return Object.assign(statusPayload(), { profiles: store.profiles, locale: store.locale, remoteAt: store.remoteAt });
+});
+ipcMain.handle("set-locale", (_e, locale) => {
   const store = loadStore();
   store.locale = locale === "en" ? "en" : "tr";
   saveStore(store);
   return store.locale;
 });
-ipcMain.handle("set-tun", function (_e, on) {
+ipcMain.handle("set-tun", (_e, on) => {
   const store = loadStore();
   store.tunMode = Boolean(on);
   saveStore(store);
-  send("status", statusPayload({ tunMode: store.tunMode }));
-  return statusPayload({ tunMode: store.tunMode });
+  const payload = statusPayload();
+  send("status", payload);
+  return payload;
 });
-ipcMain.handle("add-profile", function (_e, text) { return addFromText(text); });
-ipcMain.handle("remove-profile", function (_e, id) {
+ipcMain.handle("add-profile", (_e, text) => addFromText(text));
+ipcMain.handle("remove-profile", (_e, id) => {
   const store = loadStore();
   if (activeId === id) stopCore();
-  store.profiles = store.profiles.filter(function (p) { return p.id !== id; });
+  store.profiles = store.profiles.filter((p) => p.id !== id);
   saveStore(store);
   return store.profiles;
 });
-ipcMain.handle("connect", function (_e, id, proto) { return startCore(id, proto); });
-ipcMain.handle("disconnect", function () { stopCore(); return statusPayload(); });
-ipcMain.handle("launch-browser", function () {
-  const proxyArg = "--proxy-server=http://127.0.0.1:" + LOCAL_PORT;
-  if (process.platform === "linux") {
-    const candidates = ["google-chrome-stable", "google-chrome", "chromium-browser", "chromium", "brave-browser", "firefox"];
-    for (const b of candidates) {
-      try {
-        execFileSync("which", [b], { timeout: 1000 });
-        spawn(b, [proxyArg, "https://geldesat.com"], { detached: true, stdio: "ignore" }).unref();
-        return { ok: true, browser: b };
-      } catch {}
-    }
-    return { ok: false, error: "Tarayıcı bulunamadı" };
-  } else if (process.platform === "win32") {
-    try {
-      spawn("cmd.exe", ["/c", "start", "chrome", proxyArg, "https://geldesat.com"], { detached: true, stdio: "ignore" }).unref();
-      return { ok: true };
-    } catch {
-      return { ok: false };
-    }
+ipcMain.handle("connect", async (_e, id, transport) => {
+  try {
+    return await startCore(id, transport);
+  } catch (e) {
+    // IPC hata kodunu tasimaz; mesajin basina ekle.
+    throw new Error(e.code === "NEED_ADMIN" ? `NEED_ADMIN:${e.message}` : e.message);
   }
-  return { ok: false };
 });
-ipcMain.handle("refresh-vlist", function () { return pullVlist(); });
+ipcMain.handle("disconnect", () => {
+  stopCore();
+  return statusPayload();
+});
+ipcMain.handle("launch-browser", () => {
+  const exe = findBrowser();
+  if (!exe) return { ok: false, error: "Chrome/Edge bulunamadı" };
+  const args = [
+    `--proxy-server=http://127.0.0.1:${LOCAL_PORT}`,
+    `--user-data-dir=${dataPath("browser-profile")}`,
+    "--no-first-run",
+    "--no-default-browser-check",
+    "https://www.google.com",
+  ];
+  spawn(exe, args, { detached: true, stdio: "ignore", windowsHide: false }).unref();
+  return { ok: true, browser: path.basename(exe) };
+});
+ipcMain.handle("refresh-vlist", () => pullSubscription());
+ipcMain.handle("copy", (_e, text) => {
+  clipboard.writeText(String(text || ""));
+  return true;
+});
+ipcMain.handle("relaunch-admin", () => {
+  if (process.platform !== "win32") return false;
+  const args = process.argv.slice(1).map((a) => `'${a.replace(/'/g, "''")}'`).join(",");
+  const cmd = `Start-Process -FilePath '${process.execPath.replace(/'/g, "''")}' -Verb RunAs${args ? ` -ArgumentList ${args}` : ""}`;
+  // Yeni (yonetici) surec tek-ornek kilidini alabilsin.
+  app.releaseSingleInstanceLock();
+  try {
+    execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", cmd], { windowsHide: true, timeout: 60000 });
+  } catch {
+    app.requestSingleInstanceLock();
+    return false; // kullanici UAC'yi reddetti
+  }
+  shutdownAll();
+  app.quit();
+  return true;
+});
+

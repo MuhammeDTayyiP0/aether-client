@@ -1,27 +1,16 @@
-Coolify: vlist.geldesat.com
-=========================================
-Bu servis, Aether masaüstü ve mobil istemcilerinin açılışta sunucuları
-otomatik olarak çekmesini sağlayan hafif Nginx dağıtım servisidir.
+vlist.geldesat.com — abonelik aynasi
+====================================
 
-1. Kurulum (Coolify):
-   - Kaynak: GitHub MuhammeDTayyiP0/aether-client
-   - Base Directory: /vlist
-   - Build Pack: Dockerfile
-   - Port: 80
-   - Domains: https://vlist.geldesat.com
+Bu servis artik ortak bir dugum listesi (list.json) yayinlamaz. Eski list.json herkesin
+kullandigi tek bir anahtari dagitiyordu; kaldirildi.
 
-2. Ortam Değişkenleri (Environment Variables):
-   AETHER_NAME=Aether
-   AETHER_VLESS_UPG=vless://...paneldeki HTTPUpgrade satırı...
-   AETHER_VLESS_GRPC=vless://...paneldeki gRPC satırı...
-   AETHER_VLESS_WS=vless://...paneldeki WebSocket satırı...
+Gorevi: https://vlist.geldesat.com/sub/<kod> isteklerini ana sunucuya
+(AETHER_SERVER, varsayilan vpn.geldesat.com) iletmek. Aether istemcisi ana alan adina
+ulasamazsa aboneligini buradan dener. Diger tum yollar kamufle sayfayi dondurur.
 
-3. Çalışma Mantığı:
-   İstemciler açıldığında ilk iş https://vlist.geldesat.com/list.json adresini sorgular.
-   Bu servis yukarıdaki değişkenleri bir JSON dizisi ("nodes") olarak istemciye sunar.
-   Ortam değişkeni verilmezse vlist/list.json dosyasındaki varsayılan düğümler sunulur.
+Coolify:
+  - Kaynak: GitHub aether-client, Base Directory: /vlist, Build Pack: Dockerfile, Port: 80
+  - Domain: https://vlist.geldesat.com
+  - (istege bagli) Ortam degiskeni: AETHER_SERVER=vpn.geldesat.com
 
-4. Cloudflare DNS:
-   - CNAME vlist → Coolify sunucu IP veya hostname
-   - Proxy: Turuncu Bulut (MEB erişimi için)
-   - SSL/TLS: Full (Strict)
+Cloudflare: turuncu bulut, SSL/TLS Full (Strict).
